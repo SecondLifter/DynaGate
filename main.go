@@ -15,50 +15,64 @@ import (
 	"github.com/gin-gonic/gin"
 	clientv3 "go.etcd.io/etcd/client/v3"
 
+	"dynagate/pkg/config"
+	"dynagate/pkg/database"
 	"dynagate/pkg/handlers"
 )
 
 var (
-	host          = flag.String("h", "0.0.0.0", "host name or ip address")
-	port          = flag.Int("p", 8080, "port")
-	ldapURL       = flag.String("ldap-url", "ldap://localhost:389", "LDAP server URL")
-	ldapBaseDN    = flag.String("ldap-base", "dc=example,dc=com", "LDAP base DN")
-	etcdTimeout   = flag.Duration("etcd-timeout", 5*time.Second, "ETCD client timeout")
-	etcdEndpoints = flag.String("etcd-endpoints", "localhost:2379", "ETCD endpoints (comma separated)")
-
-	// ETCD认证相关参数
-	etcdUsername = flag.String("etcd-username", "", "ETCD authentication username")
-	etcdPassword = flag.String("etcd-password", "", "ETCD authentication password")
-
-	// ETCD TLS相关参数
-	etcdCACert = flag.String("cacert", "", "verify certificates of TLS-enabled secure servers using this CA bundle")
-	etcdCert   = flag.String("cert", "", "identify secure client using this TLS certificate file")
-	etcdKey    = flag.String("key", "", "identify secure client using this TLS key file")
+	configFile = flag.String("config", "config.yaml", "Path to configuration file")
 )
 
 func main() {
 	flag.Parse()
 
+	// 加载配置文件
+	cfg, err := config.LoadConfig(*configFile)
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
+
+	// 初始化MySQL连接
+	dbConfig := &database.Config{
+		Host:     cfg.MySQL.Host,
+		Port:     cfg.MySQL.Port,
+		User:     cfg.MySQL.User,
+		Password: cfg.MySQL.Password,
+		DBName:   cfg.MySQL.Database,
+	}
+
+	if err := database.Initialize(dbConfig); err != nil {
+		log.Fatalf("Failed to initialize database: %v", err)
+	}
+
+	// 创建操作日志处理器
+	opLogHandler, err := handlers.NewOperationLogHandler()
+	if err != nil {
+		log.Fatalf("Failed to create operation log handler: %v", err)
+	}
+	defer opLogHandler.Close()
+
 	// 配置ETCD客户端
-	config := clientv3.Config{
-		Endpoints:   []string{*etcdEndpoints},
-		DialTimeout: *etcdTimeout,
+	etcdConfig := clientv3.Config{
+		Endpoints:   cfg.ETCD.Endpoints,
+		DialTimeout: time.Duration(cfg.ETCD.Timeout) * time.Second,
 	}
 
-	// 如果提供了认证信息，配置认证
-	if *etcdUsername != "" && *etcdPassword != "" {
-		config.Username = *etcdUsername
-		config.Password = *etcdPassword
+	// 配置ETCD认证
+	if cfg.ETCD.Username != "" && cfg.ETCD.Password != "" {
+		etcdConfig.Username = cfg.ETCD.Username
+		etcdConfig.Password = cfg.ETCD.Password
 	}
 
-	// 如果提供了TLS证书，配置TLS
-	if *etcdCACert != "" && *etcdCert != "" && *etcdKey != "" {
-		cert, err := tls.LoadX509KeyPair(*etcdCert, *etcdKey)
+	// 配置ETCD TLS
+	if cfg.ETCD.CACert != "" && cfg.ETCD.Cert != "" && cfg.ETCD.Key != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.ETCD.Cert, cfg.ETCD.Key)
 		if err != nil {
 			log.Fatalf("Failed to load client cert/key pair: %v", err)
 		}
 
-		caData, err := ioutil.ReadFile(*etcdCACert)
+		caData, err := ioutil.ReadFile(cfg.ETCD.CACert)
 		if err != nil {
 			log.Fatalf("Failed to read CA cert: %v", err)
 		}
@@ -68,29 +82,22 @@ func main() {
 			log.Fatal("Failed to add CA cert to pool")
 		}
 
-		config.TLS = &tls.Config{
+		etcdConfig.TLS = &tls.Config{
 			Certificates: []tls.Certificate{cert},
 			RootCAs:      pool,
 		}
 	}
 
 	// 创建ETCD客户端
-	etcdClient, err := clientv3.New(config)
+	etcdClient, err := clientv3.New(etcdConfig)
 	if err != nil {
 		log.Fatalf("Failed to create etcd client: %v", err)
 	}
 	defer etcdClient.Close()
 
 	// 创建处理程序
-	h := handlers.NewHandler(etcdClient, *ldapURL, *ldapBaseDN)
-
-	// 创建SQLite操作日志处理器
-	dbPath := "./data/operation_logs.db"
-	opLogHandler, err := handlers.NewOperationLogHandler(dbPath)
-	if err != nil {
-		log.Fatalf("Failed to create operation log handler: %v", err)
-	}
-	defer opLogHandler.Close()
+	h := handlers.NewHandler(etcdClient, cfg.LDAP.URL, cfg.LDAP.BaseDN, cfg.LDAP.BindDN,
+		cfg.LDAP.BindPass, cfg.LDAP.UserDN, cfg.LDAP.GroupDN)
 
 	// 设置Gin路由
 	r := gin.Default()
@@ -127,16 +134,16 @@ func main() {
 		api.DELETE("/etcd/*key", h.DeleteValue)
 
 		// 操作日志API
-		api.POST("/operation_logs", opLogHandler.AddOperationLog)
-		api.GET("/operation_logs", opLogHandler.GetOperationLogs)
-		api.DELETE("/operation_logs", opLogHandler.DeleteOperationLogs)
+		api.POST("/operation_logs", opLogHandler.HandleAddOperationLog)
+		api.GET("/operation_logs", opLogHandler.HandleGetOperationLogs)
+		api.DELETE("/operation_logs", opLogHandler.HandleDeleteOperationLogs)
 
 		// 审计日志
 		api.GET("/audit", h.GetAuditLogs)
 	}
 
 	// 启动服务器
-	addr := fmt.Sprintf("%s:%d", *host, *port)
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 	log.Printf("Server starting on %s", addr)
 	if err := r.Run(addr); err != nil {
 		log.Fatalf("Failed to start server: %v", err)

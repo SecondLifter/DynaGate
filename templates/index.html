@@ -2,17 +2,18 @@
 <html>
 <head>
     <title>DynaGate - ETCD Web UI</title>
-    <!-- 添加字体预加载 -->
-    <link rel="preload" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.2.96/fonts/materialdesignicons-webfont.woff2?v=7.2.96" as="font" type="font/woff2" crossorigin>
-    <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.2.96/css/materialdesignicons.min.css" rel="stylesheet">
-    <link href="https://cdn.jsdelivr.net/npm/vuetify@3.3.15/dist/vuetify.min.css" rel="stylesheet">
+    <!-- 使用本地字体预加载 -->
+    <link rel="preload" href="/static/fonts/materialdesignicons-webfont.woff2" as="font" type="font/woff2" crossorigin>
+    <link href="/static/css/material-icons-local.css" rel="stylesheet">
+    <link href="/static/css/materialdesignicons.min.css" rel="stylesheet">
+    <link href="/static/css/vuetify.min.css" rel="stylesheet">
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, minimal-ui">
     <!-- Load Vue -->
-    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="/static/js/vue.global.prod.js"></script>
     <!-- Load Vuetify -->
-    <script src="https://cdn.jsdelivr.net/npm/vuetify@3.3.15/dist/vuetify.min.js"></script>
+    <script src="/static/js/vuetify.min.js"></script>
     <!-- Load Axios -->
-    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="/static/js/axios.min.js"></script>
     <style>
         [v-cloak] {
             display: none;
@@ -154,6 +155,27 @@
         .history-table tr:hover td {
             background-color: #f9f9f9;
         }
+        
+        /* 添加可排序表头样式 */
+        .sortable-header {
+            cursor: pointer;
+            user-select: none;
+            position: relative;
+        }
+        
+        .sortable-header:hover {
+            background-color: #eaeaea;
+        }
+        
+        /* 原生日期选择器样式 */
+        .date-input {
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            font-size: 14px;
+            flex: 1;
+            min-width: 150px;
+        }
     </style>
 </head>
 <body>
@@ -196,6 +218,7 @@
                                                     label="Username"
                                                     prepend-icon="mdi-account"
                                                     required
+                                                    @keyup.enter="login"
                                                 ></v-text-field>
                                                 <v-text-field
                                                     v-model="password"
@@ -203,6 +226,7 @@
                                                     type="password"
                                                     prepend-icon="mdi-lock"
                                                     required
+                                                    @keyup.enter="login"
                                                 ></v-text-field>
                                                 <v-alert
                                                     v-if="error"
@@ -341,6 +365,8 @@
                                                         :loading="loading"
                                                         size="small"
                                                         prepend-icon="mdi-delete"
+                                                        :disabled="!canDelete(selectedKey)"
+                                                        :title="!canDelete(selectedKey) ? 'Cannot delete protected directory' : 'Delete'"
                                                     >
                                                         Delete
                                                     </v-btn>
@@ -401,9 +427,177 @@
                                                 variant="text"
                                                 @click="loadHistory"
                                                 :loading="loading"
+                                                title="刷新历史记录"
+                                            ></v-btn>
+                                            <v-btn
+                                                icon="mdi-filter"
+                                                variant="text"
+                                                @click="showFilters = !showFilters"
+                                                :color="hasActiveFilters ? 'primary' : ''"
+                                                title="筛选历史记录"
                                             ></v-btn>
                                         </v-card-title>
+                                        
+                                        <!-- 添加过滤控件 -->
+                                        <v-expand-transition>
+                                            <div v-if="showFilters">
+                                                <v-divider></v-divider>
+                                                <v-card-text>
+                                                    <v-row>
+                                                        <v-col cols="12" sm="4">
+                                                            <v-text-field
+                                                                v-model="historyFilter.key"
+                                                                label="键名过滤"
+                                                                density="compact"
+                                                                variant="outlined"
+                                                                hide-details
+                                                                class="mb-2"
+                                                                clearable
+                                                                @update:model-value="applyFilters"
+                                                                @click:clear="clearKeyFilter"
+                                                            ></v-text-field>
+                                                        </v-col>
+                                                        <v-col cols="12" sm="4">
+                                                            <v-text-field
+                                                                v-model="historyFilter.user"
+                                                                label="用户过滤"
+                                                                density="compact"
+                                                                variant="outlined"
+                                                                hide-details
+                                                                class="mb-2"
+                                                                clearable
+                                                                @update:model-value="applyFilters"
+                                                                @click:clear="clearUserFilter"
+                                                            ></v-text-field>
+                                                        </v-col>
+                                                        <v-col cols="12" sm="4">
+                                                            <v-select
+                                                                v-model="historyFilter.operation"
+                                                                label="操作类型"
+                                                                :items="['All', 'Create', 'Update', 'Delete']"
+                                                                density="compact"
+                                                                variant="outlined"
+                                                                hide-details
+                                                                class="mb-2"
+                                                                @update:model-value="applyFilters"
+                                                            ></v-select>
+                                                        </v-col>
+                                                    </v-row>
+                                                    <v-row class="mt-2">
+                                                        <v-col cols="12" sm="5">
+                                                            <!-- 使用更简单的原生日期选择器 -->
+                                                            <div class="d-flex align-center">
+                                                                <span class="mr-2">从</span>
+                                                                <input 
+                                                                    type="date" 
+                                                                    v-model="historyFilter.startDate"
+                                                                    class="date-input"
+                                                                    @change="onDateFilterChange"
+                                                                >
+                                                                <v-btn 
+                                                                    icon="mdi-close" 
+                                                                    size="small" 
+                                                                    variant="text" 
+                                                                    density="compact"
+                                                                    @click="clearStartDate"
+                                                                    title="清除开始日期"
+                                                                ></v-btn>
+                                                            </div>
+                                                        </v-col>
+                                                        
+                                                        <v-col cols="12" sm="5">
+                                                            <div class="d-flex align-center">
+                                                                <span class="mr-2">到</span>
+                                                                <input 
+                                                                    type="date" 
+                                                                    v-model="historyFilter.endDate"
+                                                                    class="date-input"
+                                                                    @change="onDateFilterChange"
+                                                                >
+                                                                <v-btn 
+                                                                    icon="mdi-close" 
+                                                                    size="small" 
+                                                                    variant="text" 
+                                                                    density="compact"
+                                                                    @click="clearEndDate"
+                                                                    title="清除结束日期"
+                                                                ></v-btn>
+                                                            </div>
+                                                        </v-col>
+                                                        <v-col cols="12" sm="2" class="d-flex justify-end align-center">
+                                                            <v-btn
+                                                                color="primary"
+                                                                variant="text"
+                                                                @click="clearFilters"
+                                                                :disabled="!hasActiveFilters"
+                                                            >
+                                                                清除所有过滤器
+                                                            </v-btn>
+                                                        </v-col>
+                                                    </v-row>
+                                                </v-card-text>
+                                                <v-divider></v-divider>
+                                            </div>
+                                        </v-expand-transition>
+                                        
                                         <v-card-text>
+                                            <!-- 过滤结果统计 -->
+                                            <div v-if="hasActiveFilters" class="mb-3">
+                                                <v-chip size="small" color="info" class="mr-1">
+                                                    筛选结果: {{ filteredHistoryItems.length }} 条记录
+                                                </v-chip>
+                                                <v-chip 
+                                                    v-if="historyFilter.operation !== 'All'" 
+                                                    size="small" 
+                                                    :color="getOperationColor(historyFilter.operation)"
+                                                    class="mr-1"
+                                                    closable
+                                                    @click:close="historyFilter.operation = 'All'; applyFilters()"
+                                                >
+                                                    操作: {{ historyFilter.operation }}
+                                                </v-chip>
+                                                <v-chip 
+                                                    v-if="historyFilter.key" 
+                                                    size="small" 
+                                                    color="primary"
+                                                    class="mr-1"
+                                                    closable
+                                                    @click:close="clearKeyFilter()"
+                                                >
+                                                    键名: {{ historyFilter.key }}
+                                                </v-chip>
+                                                <v-chip 
+                                                    v-if="historyFilter.user" 
+                                                    size="small" 
+                                                    color="secondary"
+                                                    class="mr-1"
+                                                    closable
+                                                    @click:close="clearUserFilter()"
+                                                >
+                                                    用户: {{ historyFilter.user }}
+                                                </v-chip>
+                                                <v-chip 
+                                                    v-if="historyFilter.startDate" 
+                                                    size="small" 
+                                                    color="teal"
+                                                    class="mr-1"
+                                                    closable
+                                                    @click:close="clearStartDate"
+                                                >
+                                                    从: {{ formatDateDisplay(historyFilter.startDate) }}
+                                                </v-chip>
+                                                <v-chip 
+                                                    v-if="historyFilter.endDate" 
+                                                    size="small" 
+                                                    color="teal-darken-2"
+                                                    class="mr-1"
+                                                    closable
+                                                    @click:close="clearEndDate"
+                                                >
+                                                    到: {{ formatDateDisplay(historyFilter.endDate) }}
+                                                </v-chip>
+                                            </div>
+                                            
                                             <!-- 使用原生HTML表格替代v-data-table -->
                                             <div v-if="loading" class="text-center pa-4">
                                                 <v-progress-circular indeterminate></v-progress-circular>
@@ -413,16 +607,36 @@
                                                 <table class="history-table">
                                                     <thead>
                                                         <tr>
-                                                            <th>Operation</th>
-                                                            <th>Key</th>
-                                                            <th>User</th>
-                                                            <th>Timestamp</th>
+                                                            <th @click="sortHistory('operation')" class="sortable-header">
+                                                                Operation
+                                                                <v-icon v-if="historySort.field === 'operation'" size="small">
+                                                                    {{ historySort.desc ? 'mdi-arrow-down' : 'mdi-arrow-up' }}
+                                                                </v-icon>
+                                                            </th>
+                                                            <th @click="sortHistory('key')" class="sortable-header">
+                                                                Key
+                                                                <v-icon v-if="historySort.field === 'key'" size="small">
+                                                                    {{ historySort.desc ? 'mdi-arrow-down' : 'mdi-arrow-up' }}
+                                                                </v-icon>
+                                                            </th>
+                                                            <th @click="sortHistory('user')" class="sortable-header">
+                                                                User
+                                                                <v-icon v-if="historySort.field === 'user'" size="small">
+                                                                    {{ historySort.desc ? 'mdi-arrow-down' : 'mdi-arrow-up' }}
+                                                                </v-icon>
+                                                            </th>
+                                                            <th @click="sortHistory('timestamp')" class="sortable-header">
+                                                                Timestamp
+                                                                <v-icon v-if="historySort.field === 'timestamp'" size="small">
+                                                                    {{ historySort.desc ? 'mdi-arrow-down' : 'mdi-arrow-up' }}
+                                                                </v-icon>
+                                                            </th>
                                                             <th>Details</th>
                                                             <th>Actions</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody>
-                                                        <tr v-for="(item, index) in filteredHistoryItems" :key="index">
+                                                        <tr v-for="(item, index) in paginatedHistoryItems" :key="index">
                                                             <td>
                                                                 <v-chip
                                                                     :color="getOperationColor(item.operation)"
@@ -453,6 +667,33 @@
                                                         </tr>
                                                     </tbody>
                                                 </table>
+                                                
+                                                <!-- 添加分页控件 -->
+                                                <div class="d-flex align-center justify-space-between mt-3">
+                                                    <div class="text-caption text-grey">
+                                                        显示 {{ pagination.totalItems }} 条记录中的 
+                                                        {{ Math.min((pagination.page - 1) * pagination.itemsPerPage + 1, pagination.totalItems) }} 
+                                                        - {{ Math.min(pagination.page * pagination.itemsPerPage, pagination.totalItems) }} 条
+                                                    </div>
+                                                    <div>
+                                                        <v-select
+                                                            v-model="pagination.itemsPerPage"
+                                                            :items="[10, 25, 50, 100]"
+                                                            label="每页显示"
+                                                            density="compact"
+                                                            class="d-inline-block mr-2"
+                                                            style="width: 100px;"
+                                                            hide-details
+                                                        ></v-select>
+                                                        <v-pagination
+                                                            v-model="pagination.page"
+                                                            :length="Math.ceil(filteredHistoryItems.length / pagination.itemsPerPage)"
+                                                            :total-visible="5"
+                                                            density="compact"
+                                                            class="d-inline-flex"
+                                                        ></v-pagination>
+                                                    </div>
+                                                </div>
                                             </div>
                                         </v-card-text>
                                     </v-card>
@@ -610,6 +851,43 @@
                                             @click="newKeyData.submit()"
                                         >
                                             创建
+                                        </v-btn>
+                                    </v-card-actions>
+                                </v-card>
+                            </v-dialog>
+                            
+                            <!-- 删除确认对话框 -->
+                            <v-dialog v-model="deleteDialog" max-width="500px">
+                                <v-card>
+                                    <v-card-title class="text-h5">
+                                        <v-icon class="mr-2" color="error">mdi-delete-alert</v-icon>
+                                        确认删除
+                                    </v-card-title>
+                                    <v-card-text>
+                                        <p>您确定要删除以下配置吗？此操作无法撤销。</p>
+                                        <v-alert
+                                            type="warning"
+                                            variant="tonal"
+                                            border="start"
+                                            class="mt-2"
+                                        >
+                                            <code class="font-weight-bold">{{ keyToDelete }}</code>
+                                        </v-alert>
+                                    </v-card-text>
+                                    <v-card-actions>
+                                        <v-spacer></v-spacer>
+                                        <v-btn 
+                                            color="grey-darken-1" 
+                                            variant="text" 
+                                            @click="deleteDialog = false"
+                                        >
+                                            取消
+                                        </v-btn>
+                                        <v-btn 
+                                            color="error" 
+                                            @click="confirmDelete"
+                                        >
+                                            删除
                                         </v-btn>
                                     </v-card-actions>
                                 </v-card>
@@ -789,17 +1067,48 @@
                 const historyFilter = ref({
                     operation: 'All',
                     key: '',
-                    user: ''
+                    user: '',
+                    startDate: '',
+                    endDate: '',
+                    startDateDisplay: '',
+                    endDateDisplay: ''
                 })
                 const historyDialog = ref(false)
                 const selectedHistoryItem = ref(null)
                 const historyDetailTab = ref('diff')
                 
+                // 日期范围相关 - 保留这些变量以便计算日期范围
+                const dateRangeMin = ref(0)
+                const dateRangeMax = ref(Date.now())
+                
+                // 历史记录排序
+                const historySort = ref({
+                    field: 'timestamp', // 默认按时间戳排序
+                    desc: true          // 默认降序（最新的在前面）
+                })
+                
+                // 分页相关
+                const pagination = ref({
+                    page: 1,
+                    itemsPerPage: 10,
+                    totalItems: 0
+                })
+                
+                // 计算是否有活跃的过滤器
+                const hasActiveFilters = computed(() => {
+                    return historyFilter.value.operation !== 'All' || 
+                           historyFilter.value.key !== '' || 
+                           historyFilter.value.user !== '' ||
+                           historyFilter.value.startDate !== '' || 
+                           historyFilter.value.endDate !== '';
+                })
+                
                 // 过滤后的历史记录
                 const filteredHistoryItems = computed(() => {
                     if (!historyItems.value) return [];
                     
-                    return historyItems.value.filter(item => {
+                    // 应用过滤
+                    const filtered = historyItems.value.filter(item => {
                         // 过滤操作类型
                         if (historyFilter.value.operation !== 'All' && 
                             item.operation !== historyFilter.value.operation) {
@@ -818,8 +1127,77 @@
                             return false;
                         }
                         
+                        // 过滤日期 - 使用原生日期输入
+                        const itemDate = new Date(item.timestamp);
+                        
+                        // 开始日期过滤
+                        if (historyFilter.value.startDate) {
+                            // 解析开始日期，设置为日期开始时间 (00:00:00)
+                            const startDate = new Date(historyFilter.value.startDate);
+                            startDate.setHours(0, 0, 0, 0);
+                            
+                            if (itemDate < startDate) {
+                                return false;
+                            }
+                        }
+                        
+                        // 结束日期过滤
+                        if (historyFilter.value.endDate) {
+                            // 解析结束日期，设置为日期结束时间 (23:59:59.999)
+                            const endDate = new Date(historyFilter.value.endDate);
+                            endDate.setHours(23, 59, 59, 999);
+                            
+                            if (itemDate > endDate) {
+                                return false;
+                            }
+                        }
+                        
                         return true;
                     });
+                    
+                    // 应用排序
+                    const sorted = [...filtered].sort((a, b) => {
+                        let valA, valB;
+                        
+                        // 根据字段类型获取值
+                        if (historySort.value.field === 'timestamp') {
+                            valA = new Date(a.timestamp).getTime();
+                            valB = new Date(b.timestamp).getTime();
+                        } else {
+                            valA = a[historySort.value.field];
+                            valB = b[historySort.value.field];
+                            
+                            // 字符串比较时忽略大小写
+                            if (typeof valA === 'string') valA = valA.toLowerCase();
+                            if (typeof valB === 'string') valB = valB.toLowerCase();
+                        }
+                        
+                        // 比较值
+                        let result = 0;
+                        if (valA < valB) result = -1;
+                        if (valA > valB) result = 1;
+                        
+                        // 如果是降序，反转结果
+                        return historySort.value.desc ? -result : result;
+                    });
+                    
+                    // 更新分页总数
+                    pagination.value.totalItems = sorted.length;
+                    
+                    // 如果当前页超出范围，重置为第一页
+                    const maxPage = Math.ceil(sorted.length / pagination.value.itemsPerPage) || 1;
+                    if (pagination.value.page > maxPage) {
+                        pagination.value.page = 1;
+                    }
+                    
+                    return sorted;
+                })
+                
+                // 分页后的历史记录
+                const paginatedHistoryItems = computed(() => {
+                    const start = (pagination.value.page - 1) * pagination.value.itemsPerPage;
+                    const end = start + pagination.value.itemsPerPage;
+                    return filteredHistoryItems.value.slice(start, end);
                 })
 
                 const filteredTree = computed(() => {
@@ -1519,23 +1897,82 @@
                     return false;
                 }
 
-                // 修改删除节点的代码，确保保存到历史记录
+                // 添加受保护的顶级目录列表
+                const protectedPaths = ['/ops', '/app', '/database', '/system', '/config'];
+
+                // 检查是否是受保护的路径
+                function isProtectedPath(path) {
+                    return protectedPaths.some(prefix => {
+                        // 检查是否完全匹配顶级目录，或者是顶级目录的直接子目录
+                        return path === prefix || path.startsWith(prefix + '/');
+                    });
+                }
+
+                // 检查节点是否有子节点
+                function hasChildren(path) {
+                    // 在树结构中查找该节点
+                    const findNode = (nodes, targetPath) => {
+                        if (!nodes) return null;
+                        for (const node of nodes) {
+                            if (node.id === targetPath) {
+                                return node;
+                            }
+                            if (node.children) {
+                                const found = findNode(node.children, targetPath);
+                                if (found) return found;
+                            }
+                        }
+                        return null;
+                    };
+
+                    const node = findNode(treeStructure.value, path);
+                    return node && node.children && node.children.length > 0;
+                }
+
+                // 检查是否允许删除
+                function canDelete(path) {
+                    // 如果是受保护的顶级目录，不允许删除
+                    if (protectedPaths.includes(path)) {
+                        return false;
+                    }
+
+                    // 如果该节点有子节点，不允许删除
+                    if (hasChildren(path)) {
+                        return false;
+                    }
+
+                    return true;
+                }
+
+                // 修改删除节点的代码
                 async function deleteKey() {
-                    if (!confirm('Are you sure you want to delete this key?')) return;
-                    
-                    const keyToDelete = selectedKey.value; // 保存当前选中的键，以防后续操作改变它
+                    if (!canDelete(selectedKey.value)) {
+                        if (protectedPaths.includes(selectedKey.value)) {
+                            showError('Cannot delete protected top-level directory');
+                        } else if (hasChildren(selectedKey.value)) {
+                            showError('Cannot delete directory that contains items. Please delete all items inside first.');
+                        }
+                        return;
+                    }
+                    keyToDelete.value = selectedKey.value;
+                    deleteDialog.value = true;
+                }
+                
+                // 确认删除后执行实际删除操作
+                async function confirmDelete() {
+                    deleteDialog.value = false;
                     loading.value = true;
                     
                     try {
                         // 获取旧值用于记录
                         let oldValue = '';
                         try {
-                            const response = await axios.get(`/api/etcd${keyToDelete}`);
+                            const response = await axios.get(`/api/etcd${keyToDelete.value}`);
                             console.log('Get value before delete:', response);
                             
                             if (response.data && typeof response.data === 'object') {
                                 // 处理对象响应
-                                const keyName = keyToDelete.split('/').pop();
+                                const keyName = keyToDelete.value.split('/').pop();
                                 if (keyName && response.data[keyName]) {
                                     oldValue = response.data[keyName];
                                 } else if (response.data.value) {
@@ -1563,10 +2000,10 @@
                             }
                         }
                         
-                        console.log(`Deleting key: ${keyToDelete}, oldValue: ${oldValue}`);
+                        console.log(`Deleting key: ${keyToDelete.value}, oldValue: ${oldValue}`);
                         
                         // 删除键
-                        await axios.delete(`/api/etcd${keyToDelete}`);
+                        await axios.delete(`/api/etcd${keyToDelete.value}`);
                         
                         // 确保值不为空，如果API没获取到，使用当前值 
                         const finalOldValue = oldValue || currentValue.value || '(empty value)';
@@ -1574,7 +2011,7 @@
                         // 准备记录条目
                         const logEntry = {
                             operation: 'Delete',
-                            key: keyToDelete,
+                            key: keyToDelete.value,
                             user: currentUser.value,
                             timestamp: new Date().toISOString(),
                             old_value: finalOldValue,
@@ -1582,7 +2019,7 @@
                         };
                         
                         // 标识这次删除操作
-                        const deleteId = `delete-${keyToDelete}-${Date.now()}`;
+                        const deleteId = `delete-${keyToDelete.value}-${Date.now()}`;
                         
                         // 尝试通过API保存到服务器
                         let savedToServer = false;
@@ -1619,7 +2056,7 @@
                         resetSearch();
                         
                         // 从树结构中移除节点
-                        removeNodeFromTree(treeStructure.value, keyToDelete);
+                        removeNodeFromTree(treeStructure.value, keyToDelete.value);
                         
                         // 然后再刷新树以确保同步
                         await loadTree();
@@ -1726,138 +2163,112 @@
                             return false;
                         };
                         
-                        // 1. 先尝试获取API数据
-                        try {
-                            console.log('Fetching history from API...');
-                            const response = await axios.get('/api/operation_logs');
+                        // 获取API数据
+                        console.log('Fetching history from API...');
+                        const response = await axios.get('/api/operation_logs');
+                        
+                        if (response.data && response.data.logs && Array.isArray(response.data.logs)) {
+                            console.log('API returned', response.data.logs.length, 'records');
                             
-                            if (response.data && response.data.logs && Array.isArray(response.data.logs)) {
-                                console.log('API returned', response.data.logs.length, 'records');
+                            // 转换并添加API数据
+                            response.data.logs.forEach(log => {
+                                const item = {
+                                    operation: log.operation,
+                                    timestamp: log.timestamp,
+                                    key: log.key,
+                                    user: log.user || 'unknown',
+                                    oldValue: log.old_value || '',
+                                    newValue: log.new_value || ''
+                                };
                                 
-                                // 转换并添加API数据
-                                response.data.logs.forEach(log => {
-                                    const item = {
-                                        operation: log.operation,
-                                        timestamp: log.timestamp,
-                                        key: log.key,
-                                        user: log.user || 'unknown',
-                                        oldValue: log.old_value || log.oldValue || log.old || '',
-                                        newValue: log.new_value || log.newValue || log.new || ''
-                                    };
-                                    
-                                    // 对于Create操作，确保旧值为空
-                                    if (log.operation === 'Create') {
-                                        item.oldValue = '';
-                                    }
-                                    
-                                    // 对于删除操作，尝试从各个字段获取旧值
-                                    if (log.operation === 'Delete' && !item.oldValue) {
-                                        if (log.value) item.oldValue = log.value;
-                                        else if (log.data) item.oldValue = log.data;
-                                        else if (log.content) item.oldValue = log.content;
-                                    }
-                                    
-                                    addUniqueItem(item);
-                                });
-                            }
-                        } catch (apiError) {
-                            console.warn('Failed to fetch from API:', apiError);
+                                addUniqueItem(item);
+                            });
                         }
                         
-                        // 2. 然后尝试获取本地存储数据 (仅当API获取失败或数据不足时补充)
-                        try {
-                            const pendingLogs = JSON.parse(localStorage.getItem('pendingOperationLogs') || '[]');
-                            if (pendingLogs.length > 0) {
-                                console.log('Found', pendingLogs.length, 'logs in local storage');
-                                
-                                pendingLogs.forEach(log => {
-                                    const item = {
-                                        operation: log.operation,
-                                        timestamp: log.timestamp,
-                                        key: log.key,
-                                        user: log.user || currentUser.value,
-                                        oldValue: log.old_value || log.oldValue || '',
-                                        newValue: log.new_value || log.newValue || '',
-                                        // 保留本地ID以帮助调试
-                                        localId: log.localId || null
-                                    };
-                                    
-                                    addUniqueItem(item);
-                                });
-                            }
-                        } catch (localError) {
-                            console.error('Failed to load from local storage:', localError);
-                        }
-                        
-                        // 3. 如果没有任何数据，添加一些测试数据
-                        if (allHistoryItems.length === 0) {
-                            console.log('No history data found, using test data');
-                            
-                            // 测试数据
-                            const testData = [
-                                {
-                                    operation: 'Create',
-                                    timestamp: new Date().toISOString(),
-                                    key: '/test/config1',
-                                    user: 'admin',
-                                    oldValue: '',
-                                    newValue: 'test value 1'
-                                },
-                                {
-                                    operation: 'Update',
-                                    timestamp: new Date(Date.now() - 1000*60).toISOString(),
-                                    key: '/test/config1',
-                                    user: 'admin',
-                                    oldValue: 'test value 1',
-                                    newValue: 'updated value'
-                                },
-                                {
-                                    operation: 'Delete',
-                                    timestamp: new Date(Date.now() - 1000*60*5).toISOString(),
-                                    key: '/test/config2',
-                                    user: 'admin',
-                                    oldValue: 'deleted value',
-                                    newValue: ''
-                                }
-                            ];
-                            
-                            testData.forEach(item => addUniqueItem(item));
-                        }
-                        
-                        // 4. 按时间排序
+                        // 按时间排序
                         allHistoryItems.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
                         
                         // 更新状态
                         historyItems.value = allHistoryItems;
                         console.log('Final history items:', historyItems.value.length);
                         
-                        // 调试输出一些删除记录
-                        const deleteItems = historyItems.value.filter(item => item.operation === 'Delete');
-                        if (deleteItems.length > 0) {
-                            console.log('Delete records:', deleteItems.length);
-                            deleteItems.forEach((item, index) => {
-                                if (index < 3) { // 只输出前3条，避免日志过长
-                                    console.log(`Delete record ${index+1}:`, item);
-                                }
-                            });
-                        } else {
-                            console.log('No delete records found');
-                        }
                     } catch (err) {
                         console.error('History loading error:', err);
-                        historyItems.value = [
-                            {
-                                operation: 'Error',
-                                timestamp: new Date().toISOString(),
-                                key: 'Error loading history',
-                                user: 'system',
-                                oldValue: '',
-                                newValue: err.message || 'Unknown error'
-                            }
-                        ];
+                        historyItems.value = [];
+                        showError('Failed to load operation history: ' + (err.response?.data?.error || err.message));
                     } finally {
                         loading.value = false;
                     }
+                }
+
+                // 应用过滤器
+                function applyFilters() {
+                    console.log('Applying filters:', JSON.stringify(historyFilter.value));
+                    // 重置到第一页
+                    pagination.value.page = 1;
+                }
+                
+                // 清除指定过滤器
+                function clearKeyFilter() {
+                    historyFilter.value.key = '';
+                    applyFilters();
+                }
+                
+                function clearUserFilter() {
+                    historyFilter.value.user = '';
+                    applyFilters();
+                }
+                
+                // 日期选择器相关方法
+                function onDateFilterChange() {
+                    console.log('Date filter changed:', {
+                        startDate: historyFilter.value.startDate,
+                        endDate: historyFilter.value.endDate
+                    });
+                    applyFilters();
+                }
+                
+                function clearStartDate() {
+                    historyFilter.value.startDate = '';
+                    applyFilters();
+                }
+                
+                function clearEndDate() {
+                    historyFilter.value.endDate = '';
+                    applyFilters();
+                }
+                
+                // 清除所有过滤器
+                function clearFilters() {
+                    console.log('Clearing all filters');
+                    historyFilter.value = {
+                        operation: 'All',
+                        key: '',
+                        user: '',
+                        startDate: '',
+                        endDate: ''
+                    };
+                    console.log('Filters reset to:', historyFilter.value);
+                    applyFilters();
+                }
+                
+                // 排序历史记录
+                function sortHistory(field) {
+                    console.log('Sorting by:', field);
+                    // 如果点击当前排序字段，切换排序方向
+                    if (historySort.value.field === field) {
+                        historySort.value.desc = !historySort.value.desc;
+                    } else {
+                        // 否则切换排序字段，并默认为降序
+                        historySort.value.field = field;
+                        historySort.value.desc = true;
+                    }
+                }
+                
+                // 格式化日期滑块标签
+                function formatSliderDate(timestamp) {
+                    const date = new Date(timestamp);
+                    return date.toLocaleDateString();
                 }
 
                 function getOperationColor(operation) {
@@ -1900,16 +2311,6 @@
                     
                     historyDialog.value = true;
                 }
-                
-                // 清除过滤器
-                function clearFilters() {
-                    historyFilter.value = {
-                        operation: 'All',
-                        key: '',
-                        user: ''
-                    };
-                    loadHistory();
-                }
 
                 // 在Vue的setup中添加一个刷新按钮的处理函数
                 function refreshTree() {
@@ -1926,11 +2327,27 @@
                 const newKeyDialogVisible = ref(false);
                 const newKeyData = ref(null);
 
+                // 删除确认对话框
+                const deleteDialog = ref(false);
+                const keyToDelete = ref('');
+
                 // 用于截断显示的文本
                 function truncateText(text, maxLength) {
                     if (!text) return '';
                     if (text.length <= maxLength) return text;
                     return text.substring(0, maxLength) + '...';
+                }
+
+                // 格式化日期显示
+                function formatDateDisplay(dateStr) {
+                    if (!dateStr) return '';
+                    try {
+                        const date = new Date(dateStr);
+                        return date.toLocaleDateString();
+                    } catch (e) {
+                        console.error('Error formatting date:', e);
+                        return dateStr;
+                    }
                 }
 
                 onMounted(async () => {
@@ -2005,12 +2422,34 @@
                     showFilters,
                     historyFilter,
                     filteredHistoryItems,
+                    paginatedHistoryItems,
                     clearFilters,
                     historyDialog,
                     selectedHistoryItem,
                     historyDetailTab,
                     viewHistoryDetails,
-                    DiffViewer
+                    DiffViewer,
+                    // 排序和过滤
+                    historySort,
+                    sortHistory,
+                    applyFilters,
+                    clearKeyFilter,
+                    clearUserFilter,
+                    hasActiveFilters,
+                    // 分页
+                    pagination,
+                    // 日期范围
+                    dateRangeMin,
+                    dateRangeMax,
+                    onDateFilterChange,
+                    clearStartDate,
+                    clearEndDate,
+                    formatDateDisplay,
+                    // 删除确认对话框
+                    deleteDialog,
+                    keyToDelete,
+                    confirmDelete,
+                    canDelete
                 }
             }
         }

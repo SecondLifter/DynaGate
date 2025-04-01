@@ -17,18 +17,26 @@ import (
 )
 
 type Handler struct {
-	etcdClient *clientv3.Client
-	ldapURL    string
-	ldapBaseDN string
-	auditLog   *audit.Logger
+	etcdClient  *clientv3.Client
+	ldapURL     string
+	ldapBaseDN  string
+	ldapBindDN  string
+	ldapBindPwd string
+	ldapUserDN  string
+	ldapGroupDN string
+	auditLog    *audit.Logger
 }
 
-func NewHandler(etcdClient *clientv3.Client, ldapURL, ldapBaseDN string) *Handler {
+func NewHandler(etcdClient *clientv3.Client, ldapURL, ldapBaseDN, ldapBindDN, ldapBindPwd, ldapUserDN, ldapGroupDN string) *Handler {
 	return &Handler{
-		etcdClient: etcdClient,
-		ldapURL:    ldapURL,
-		ldapBaseDN: ldapBaseDN,
-		auditLog:   audit.NewLogger(etcdClient),
+		etcdClient:  etcdClient,
+		ldapURL:     ldapURL,
+		ldapBaseDN:  ldapBaseDN,
+		ldapBindDN:  ldapBindDN,
+		ldapBindPwd: ldapBindPwd,
+		ldapUserDN:  ldapUserDN,
+		ldapGroupDN: ldapGroupDN,
+		auditLog:    audit.NewLogger(etcdClient),
 	}
 }
 
@@ -77,10 +85,48 @@ func (h *Handler) Login(c *gin.Context) {
 	}
 	defer l.Close()
 
-	// 构建用户DN
-	userDN := fmt.Sprintf("uid=%s,%s", req.Username, h.ldapBaseDN)
+	// 先使用管理员绑定（如果配置了绑定DN）
+	if h.ldapBindDN != "" && h.ldapBindPwd != "" {
+		err = l.Bind(h.ldapBindDN, h.ldapBindPwd)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to bind with admin credentials"})
+			return
+		}
+	}
 
-	// 尝试绑定（验证）
+	// 构建用户DN
+	var userDN string
+	if h.ldapUserDN != "" {
+		userDN = fmt.Sprintf("uid=%s,%s,%s", req.Username, h.ldapUserDN, h.ldapBaseDN)
+	} else {
+		userDN = fmt.Sprintf("uid=%s,%s", req.Username, h.ldapBaseDN)
+	}
+
+	// 如果使用管理员绑定，先进行用户搜索
+	if h.ldapBindDN != "" && h.ldapBindPwd != "" {
+		searchRequest := ldap.NewSearchRequest(
+			h.ldapBaseDN,
+			ldap.ScopeWholeSubtree, ldap.NeverDerefAliases, 0, 0, false,
+			fmt.Sprintf("(uid=%s)", req.Username),
+			[]string{"dn"},
+			nil,
+		)
+
+		sr, err := l.Search(searchRequest)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to search for user"})
+			return
+		}
+
+		if len(sr.Entries) != 1 {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "user not found or multiple entries found"})
+			return
+		}
+
+		userDN = sr.Entries[0].DN
+	}
+
+	// 尝试用户绑定（验证密码）
 	err = l.Bind(userDN, req.Password)
 	if err != nil {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid credentials"})
