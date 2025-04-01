@@ -1,0 +1,2026 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>DynaGate - ETCD Web UI</title>
+    <!-- 添加字体预加载 -->
+    <link rel="preload" href="https://cdn.jsdelivr.net/npm/@mdi/font@7.2.96/fonts/materialdesignicons-webfont.woff2?v=7.2.96" as="font" type="font/woff2" crossorigin>
+    <link href="https://cdn.jsdelivr.net/npm/@mdi/font@7.2.96/css/materialdesignicons.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/vuetify@3.3.15/dist/vuetify.min.css" rel="stylesheet">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, minimal-ui">
+    <!-- Load Vue -->
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <!-- Load Vuetify -->
+    <script src="https://cdn.jsdelivr.net/npm/vuetify@3.3.15/dist/vuetify.min.js"></script>
+    <!-- Load Axios -->
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <style>
+        [v-cloak] {
+            display: none;
+        }
+        .custom-tree-node {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            font-size: 14px;
+            padding: 8px;
+        }
+        .node-icon {
+            margin-right: 8px;
+            font-size: 20px;
+        }
+        .tree-value {
+            color: #666;
+            margin-left: 8px;
+            font-family: monospace;
+        }
+        .search-box {
+            margin: 16px;
+        }
+        .value-editor {
+            font-family: monospace;
+            width: 100%;
+            min-height: 200px;
+        }
+        .error-text {
+            color: #ff5252;
+        }
+        .success-text {
+            color: #4caf50;
+        }
+        /* 添加树形结构样式 */
+        .etcd-tree-node {
+            cursor: pointer;
+            padding: 8px 4px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+        }
+        .etcd-tree-node:hover {
+            background-color: rgba(0,0,0,0.05);
+        }
+        .etcd-tree-node.selected {
+            background-color: rgba(25, 118, 210, 0.1);
+        }
+        .etcd-tree-children {
+            margin-left: 24px;
+        }
+        .etcd-tree-folder, .etcd-tree-file {
+            margin-right: 8px;
+        }
+        .etcd-tree-folder {
+            color: #FFA000;
+        }
+        .etcd-tree-file {
+            color: #2196F3;
+        }
+        .etcd-tree-toggle {
+            width: 16px;
+            text-align: center;
+            margin-right: 4px;
+        }
+        .etcd-tree-name {
+            flex: 1;
+        }
+        .etcd-tree-value {
+            color: #666;
+            font-size: 0.85em;
+            margin-left: 8px;
+            max-width: 100px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        /* 滚动条样式 */
+        .tree-container::-webkit-scrollbar {
+            width: 8px;
+        }
+        .tree-container::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+        .tree-container::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+        .tree-container::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        /* 添加diff查看器样式 */
+        .diff-line {
+            font-family: monospace;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            padding: 2px 0;
+        }
+        .diff-added {
+            background-color: #e6ffed;
+            color: #22863a;
+        }
+        .diff-removed {
+            background-color: #ffeef0;
+            color: #cb2431;
+        }
+        .diff-common {
+            color: #24292e;
+        }
+        .value-display {
+            background-color: #f6f8fa;
+            padding: 16px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        
+        /* 表格样式 */
+        .history-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 16px;
+        }
+        
+        .history-table th {
+            background-color: #f5f5f5;
+            text-align: left;
+            padding: 12px;
+        }
+        
+        .history-table td {
+            padding: 12px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        
+        .history-table tr:hover td {
+            background-color: #f9f9f9;
+        }
+    </style>
+</head>
+<body>
+    <div id="app" v-cloak></div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, watch } = Vue
+        const vuetify = Vuetify.createVuetify()
+
+        const App = {
+            template: `
+                <v-app>
+                    <v-app-bar app color="primary" dark>
+                        <v-toolbar-title>DynaGate</v-toolbar-title>
+                        <v-spacer></v-spacer>
+                        <template v-if="isLoggedIn">
+                            <v-chip class="mr-4">
+                                <v-avatar left>
+                                    <v-icon>mdi-account</v-icon>
+                                </v-avatar>
+                                {{ currentUser }}
+                            </v-chip>
+                            <v-btn text @click="logout">
+                                <v-icon left>mdi-logout</v-icon>
+                                Logout
+                            </v-btn>
+                        </template>
+                    </v-app-bar>
+
+                    <v-main>
+                        <v-container fluid v-if="!isLoggedIn">
+                            <v-row justify="center" align="center" style="height: 80vh;">
+                                <v-col cols="12" sm="8" md="4">
+                                    <v-card>
+                                        <v-card-title class="text-h5">Login</v-card-title>
+                                        <v-card-text>
+                                            <v-form @submit.prevent="login">
+                                                <v-text-field
+                                                    v-model="username"
+                                                    label="Username"
+                                                    prepend-icon="mdi-account"
+                                                    required
+                                                ></v-text-field>
+                                                <v-text-field
+                                                    v-model="password"
+                                                    label="Password"
+                                                    type="password"
+                                                    prepend-icon="mdi-lock"
+                                                    required
+                                                ></v-text-field>
+                                                <v-alert
+                                                    v-if="error"
+                                                    type="error"
+                                                    density="compact"
+                                                >{{ error }}</v-alert>
+                                            </v-form>
+                                        </v-card-text>
+                                        <v-card-actions>
+                                            <v-spacer></v-spacer>
+                                            <v-btn
+                                                color="primary"
+                                                @click="login"
+                                                :loading="loading"
+                                            >Login</v-btn>
+                                        </v-card-actions>
+                                    </v-card>
+                                </v-col>
+                            </v-row>
+                        </v-container>
+
+                        <v-container fluid v-else>
+                            <v-tabs v-model="activeTab">
+                                <v-tab value="tree">Configuration Tree</v-tab>
+                                <v-tab value="history">History</v-tab>
+                            </v-tabs>
+
+                            <v-window v-model="activeTab">
+                                <v-window-item value="tree">
+                                    <v-row>
+                                        <v-col cols="12" md="4">
+                                            <v-card>
+                                                <v-card-title class="d-flex align-center">
+                                                    <div class="d-flex align-center">
+                                                        <v-icon class="mr-2">mdi-file-tree</v-icon>
+                                                        Configuration Tree
+                                                    </div>
+                                                    <v-spacer></v-spacer>
+                                                    <v-btn
+                                                        icon="mdi-refresh"
+                                                        variant="text"
+                                                        @click="refreshTree"
+                                                        :loading="loading"
+                                                        size="small"
+                                                        class="mr-1"
+                                                        title="刷新树结构"
+                                                    ></v-btn>
+                                                    <v-btn
+                                                        icon="mdi-plus"
+                                                        variant="text"
+                                                        color="success"
+                                                        @click="createNewKey"
+                                                        size="small"
+                                                        class="mr-1"
+                                                        title="创建新节点"
+                                                    ></v-btn>
+                                                    <v-btn
+                                                        icon="mdi-bug"
+                                                        variant="text"
+                                                        @click="debugData"
+                                                        class="mr-1"
+                                                        color="warning"
+                                                        size="small"
+                                                        title="调试数据"
+                                                    ></v-btn>
+                                                </v-card-title>
+                                                
+                                                <v-card-text class="pt-2 pb-0">
+                                                    <v-text-field
+                                                        v-model="search"
+                                                        prepend-icon="mdi-magnify"
+                                                        label="搜索配置"
+                                                        single-line
+                                                        hide-details
+                                                        density="compact"
+                                                        clearable
+                                                        @click:clear="resetSearch"
+                                                    ></v-text-field>
+                                                </v-card-text>
+                                                
+                                                <v-divider class="mt-2"></v-divider>
+                                                
+                                                <div class="pa-2">
+                                                    <div v-if="filteredTree.length === 0" class="text-center pa-4">
+                                                        <v-icon size="large" color="grey-lighten-1" class="mb-2">mdi-folder-open</v-icon>
+                                                        <div class="text-grey">No data available</div>
+                                                        <v-btn
+                                                            variant="text"
+                                                            size="small"
+                                                            color="primary"
+                                                            class="mt-2"
+                                                            @click="refreshTree"
+                                                        >
+                                                            <v-icon class="mr-1">mdi-refresh</v-icon>
+                                                            Refresh
+                                                        </v-btn>
+                                                    </div>
+                                                    <div v-else class="tree-container" style="max-height: 70vh; overflow-y: auto; overflow-x: hidden; padding-right: 5px;">
+                                                        <!-- 使用更简单的方式渲染树形结构 -->
+                                                        <div class="etcd-tree">
+                                                            <template v-for="node in filteredTree" :key="node.id">
+                                                                <etcd-tree-node 
+                                                                    :node="node" 
+                                                                    :selected-key="selectedKey"
+                                                                    @node-click="handleNodeSelect"
+                                                                />
+                                                            </template>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </v-card>
+                                        </v-col>
+
+                                        <v-col cols="12" md="8" v-if="selectedKey">
+                                            <v-card>
+                                                <v-card-title class="d-flex align-center">
+                                                    <div class="d-flex align-center">
+                                                        <v-icon class="mr-2">mdi-pencil</v-icon>
+                                                        Edit Value
+                                                    </div>
+                                                    <v-spacer></v-spacer>
+                                                    <v-btn
+                                                        color="primary"
+                                                        @click="saveValue"
+                                                        :loading="loading"
+                                                        :disabled="!!configError"
+                                                        class="mr-2"
+                                                        size="small"
+                                                        prepend-icon="mdi-content-save"
+                                                    >
+                                                        Save
+                                                    </v-btn>
+                                                    <v-btn
+                                                        color="error"
+                                                        @click="deleteKey"
+                                                        :loading="loading"
+                                                        size="small"
+                                                        prepend-icon="mdi-delete"
+                                                    >
+                                                        Delete
+                                                    </v-btn>
+                                                </v-card-title>
+                                                
+                                                <v-divider></v-divider>
+                                                
+                                                <v-card-text>
+                                                    <v-row>
+                                                        <v-col cols="12">
+                                                            <v-text-field
+                                                                v-model="selectedKey"
+                                                                label="Key"
+                                                                readonly
+                                                                variant="outlined"
+                                                                density="compact"
+                                                                bg-color="grey-lighten-4"
+                                                            ></v-text-field>
+                                                        </v-col>
+                                                    </v-row>
+                                                    
+                                                    <div v-if="configError" class="error-text mb-3">
+                                                        <v-alert
+                                                            type="error"
+                                                            variant="tonal"
+                                                            border="start"
+                                                            closable
+                                                        >
+                                                            <div class="font-weight-bold mb-1">配置错误:</div>
+                                                            {{ configError }}
+                                                        </v-alert>
+                                                    </div>
+                                                    
+                                                    <v-textarea
+                                                        v-model="currentValue"
+                                                        label="Value"
+                                                        class="value-editor"
+                                                        auto-grow
+                                                        filled
+                                                        rows="12"
+                                                        @input="validateConfigRealtime"
+                                                        :error="!!configError"
+                                                        :error-messages="configError ? '请修复上述错误' : ''"
+                                                    ></v-textarea>
+                                                </v-card-text>
+                                            </v-card>
+                                        </v-col>
+                                    </v-row>
+                                </v-window-item>
+
+                                <v-window-item value="history">
+                                    <v-card class="mt-4">
+                                        <v-card-title>
+                                            Operation History
+                                            <v-spacer></v-spacer>
+                                            <v-btn
+                                                icon="mdi-refresh"
+                                                variant="text"
+                                                @click="loadHistory"
+                                                :loading="loading"
+                                            ></v-btn>
+                                        </v-card-title>
+                                        <v-card-text>
+                                            <!-- 使用原生HTML表格替代v-data-table -->
+                                            <div v-if="loading" class="text-center pa-4">
+                                                <v-progress-circular indeterminate></v-progress-circular>
+                                                <div class="mt-2">Loading history...</div>
+                                            </div>
+                                            <div v-else>
+                                                <table class="history-table">
+                                                    <thead>
+                                                        <tr>
+                                                            <th>Operation</th>
+                                                            <th>Key</th>
+                                                            <th>User</th>
+                                                            <th>Timestamp</th>
+                                                            <th>Details</th>
+                                                            <th>Actions</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody>
+                                                        <tr v-for="(item, index) in filteredHistoryItems" :key="index">
+                                                            <td>
+                                                                <v-chip
+                                                                    :color="getOperationColor(item.operation)"
+                                                                    size="small"
+                                                                >
+                                                                    {{ item.operation }}
+                                                                </v-chip>
+                                                            </td>
+                                                            <td style="max-width: 300px; overflow: hidden; text-overflow: ellipsis;">
+                                                                {{ item.key }}
+                                                            </td>
+                                                            <td>{{ item.user }}</td>
+                                                            <td>{{ formatDate(item.timestamp) }}</td>
+                                                            <td>
+                                                                <div v-if="item.operation === 'Delete' && item.oldValue" class="text-caption">
+                                                                    <span class="font-weight-medium">删除前的值:</span>
+                                                                    <span class="font-italic">{{ truncateText(item.oldValue, 30) }}</span>
+                                                                </div>
+                                                            </td>
+                                                            <td>
+                                                                <v-btn icon="mdi-eye" size="small" @click="viewHistoryDetails(item)"></v-btn>
+                                                            </td>
+                                                        </tr>
+                                                        <tr v-if="filteredHistoryItems.length === 0">
+                                                            <td colspan="6" style="padding: 16px; text-align: center;">
+                                                                No history records found
+                                                            </td>
+                                                        </tr>
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </v-card-text>
+                                    </v-card>
+
+                                    <!-- 操作记录详情对话框 -->
+                                    <v-dialog v-model="historyDialog" max-width="800px">
+                                        <v-card v-if="selectedHistoryItem">
+                                            <v-card-title>
+                                                <v-chip :color="getOperationColor(selectedHistoryItem.operation)" class="mr-2">
+                                                    {{ selectedHistoryItem.operation }}
+                                                </v-chip>
+                                                {{ selectedHistoryItem.key }}
+                                            </v-card-title>
+                                            <v-card-subtitle>
+                                                By {{ selectedHistoryItem.user }} at {{ formatDate(selectedHistoryItem.timestamp) }}
+                                            </v-card-subtitle>
+                                            <v-card-text>
+                                                <v-tabs v-model="historyDetailTab">
+                                                    <v-tab value="diff" v-if="selectedHistoryItem.operation !== 'Delete'">Diff</v-tab>
+                                                    <v-tab value="old">Old Value</v-tab>
+                                                    <v-tab value="new" v-if="selectedHistoryItem.operation !== 'Delete'">New Value</v-tab>
+                                                    <v-tab value="debug">Debug</v-tab>
+                                                </v-tabs>
+                                                <v-window v-model="historyDetailTab" class="mt-2">
+                                                    <v-window-item value="diff">
+                                                        <diff-viewer 
+                                                            :old-value="selectedHistoryItem.oldValue || ''" 
+                                                            :new-value="selectedHistoryItem.newValue || ''"
+                                                        ></diff-viewer>
+                                                    </v-window-item>
+                                                    <v-window-item value="old">
+                                                        <div class="mb-2" v-if="selectedHistoryItem.operation === 'Delete'">
+                                                            <v-alert color="orange" icon="mdi-alert" variant="tonal">
+                                                                <strong>删除前的值</strong>
+                                                            </v-alert>
+                                                        </div>
+                                                        <v-alert v-if="!selectedHistoryItem.oldValue && selectedHistoryItem.operation === 'Create'" 
+                                                                 type="info" 
+                                                                 text>
+                                                            新建操作，无原始值
+                                                        </v-alert>
+                                                        <v-alert v-else-if="!selectedHistoryItem.oldValue && selectedHistoryItem.operation !== 'Create'" 
+                                                                 type="warning" 
+                                                                 text>
+                                                            无法获取原始值，可能是API响应格式问题。
+                                                        </v-alert>
+                                                        <pre v-else class="value-display">{{ selectedHistoryItem.oldValue }}</pre>
+                                                    </v-window-item>
+                                                    <v-window-item value="new">
+                                                        <v-alert v-if="selectedHistoryItem.operation === 'Delete'" type="warning" text>
+                                                            此为删除操作，没有新值。请查看"Old Value"选项卡了解被删除的内容。
+                                                        </v-alert>
+                                                        <v-alert v-else-if="!selectedHistoryItem.newValue" type="info" text>No new value</v-alert>
+                                                        <pre v-else class="value-display">{{ selectedHistoryItem.newValue }}</pre>
+                                                    </v-window-item>
+                                                    <v-window-item value="debug">
+                                                        <v-alert type="info" text class="mb-2">
+                                                            此页面仅供调试使用，显示历史记录的原始数据
+                                                        </v-alert>
+                                                        <v-expansion-panels>
+                                                            <v-expansion-panel title="Record Data">
+                                                                <v-expansion-panel-text>
+                                                                    <pre class="value-display">{{ JSON.stringify(selectedHistoryItem, null, 2) }}</pre>
+                                                                </v-expansion-panel-text>
+                                                            </v-expansion-panel>
+                                                            <v-expansion-panel title="Key Info">
+                                                                <v-expansion-panel-text>
+                                                                    <div><strong>Operation:</strong> {{ selectedHistoryItem.operation }}</div>
+                                                                    <div><strong>Key:</strong> {{ selectedHistoryItem.key }}</div>
+                                                                    <div><strong>Has Old Value:</strong> {{ !!selectedHistoryItem.oldValue }}</div>
+                                                                    <div><strong>Old Value Length:</strong> {{ selectedHistoryItem.oldValue ? selectedHistoryItem.oldValue.length : 0 }}</div>
+                                                                </v-expansion-panel-text>
+                                                            </v-expansion-panel>
+                                                        </v-expansion-panels>
+                                                    </v-window-item>
+                                                </v-window>
+                                            </v-card-text>
+                                            <v-card-actions>
+                                                <v-spacer></v-spacer>
+                                                <v-btn color="primary" text @click="historyDialog = false">Close</v-btn>
+                                            </v-card-actions>
+                                        </v-card>
+                                    </v-dialog>
+                                </v-window-item>
+                            </v-window>
+
+                            <!-- 创建新节点对话框 -->
+                            <v-dialog v-model="newKeyDialogVisible" max-width="600px">
+                                <v-card v-if="newKeyData">
+                                    <v-card-title class="text-h5">
+                                        <v-icon class="mr-2">mdi-key-plus</v-icon>
+                                        创建新配置
+                                    </v-card-title>
+                                    <v-card-text>
+                                        <v-form @submit.prevent="newKeyData.submit()">
+                                            <v-text-field
+                                                v-model="newKeyData.path"
+                                                label="配置路径"
+                                                required
+                                                placeholder="例如: /app/settings/database"
+                                                variant="outlined"
+                                                prepend-icon="mdi-key"
+                                            ></v-text-field>
+                                            
+                                            <v-textarea
+                                                v-model="newKeyData.value"
+                                                label="配置值"
+                                                placeholder="输入配置的值"
+                                                variant="outlined"
+                                                rows="5"
+                                                auto-grow
+                                                prepend-icon="mdi-text-box"
+                                            ></v-textarea>
+                                            
+                                            <v-radio-group
+                                                v-model="newKeyData.ttl"
+                                                label="过期时间(TTL)"
+                                                inline
+                                            >
+                                                <v-radio label="无限制" :value="-1"></v-radio>
+                                                <v-radio label="1小时" :value="3600"></v-radio>
+                                                <v-radio label="1天" :value="86400"></v-radio>
+                                                <v-radio label="1周" :value="604800"></v-radio>
+                                                <v-radio label="自定义" :value="0"></v-radio>
+                                            </v-radio-group>
+                                            
+                                            <v-text-field
+                                                v-if="newKeyData.ttl === 0"
+                                                v-model.number="newKeyData.customTtl"
+                                                label="自定义TTL(秒)"
+                                                type="number"
+                                                min="1"
+                                                variant="outlined"
+                                                density="compact"
+                                                hint="设置键值的过期时间，过期后自动删除"
+                                                persistent-hint
+                                            ></v-text-field>
+                                            
+                                            <div v-if="newKeyData.ttl !== -1" class="text-caption mt-2">
+                                                该配置将在 {{ formatTTL(newKeyData.ttl === 0 ? newKeyData.customTtl : newKeyData.ttl) }} 后过期
+                                            </div>
+                                        </v-form>
+                                    </v-card-text>
+                                    <v-card-actions>
+                                        <v-spacer></v-spacer>
+                                        <v-btn 
+                                            color="grey-darken-1" 
+                                            variant="text" 
+                                            @click="newKeyDialogVisible = false"
+                                        >
+                                            取消
+                                        </v-btn>
+                                        <v-btn 
+                                            color="primary" 
+                                            @click="newKeyData.submit()"
+                                        >
+                                            创建
+                                        </v-btn>
+                                    </v-card-actions>
+                                </v-card>
+                            </v-dialog>
+                            
+                            <v-snackbar
+                                v-model="snackbar.show"
+                                :color="snackbar.color"
+                                :timeout="3000"
+                            >
+                                {{ snackbar.text }}
+                                <template v-slot:actions>
+                                    <v-btn
+                                        variant="text"
+                                        @click="snackbar.show = false"
+                                    >
+                                        Close
+                                    </v-btn>
+                                </template>
+                            </v-snackbar>
+                        </v-container>
+                    </v-main>
+                </v-app>
+            `,
+            setup() {
+                // 自定义树节点组件
+                const EtcdTreeNode = {
+                    name: 'EtcdTreeNode',
+                    props: {
+                        node: Object,
+                        selectedKey: String
+                    },
+                    emits: ['node-click'],
+                    setup(props, { emit }) {
+                        const expanded = Vue.ref(false);
+                        
+                        function toggleExpand(e) {
+                            e.stopPropagation();
+                            expanded.value = !expanded.value;
+                        }
+                        
+                        function selectNode(e) {
+                            e.stopPropagation();
+                            emit('node-click', props.node);
+                        }
+                        
+                        return {
+                            expanded,
+                            toggleExpand,
+                            selectNode
+                        };
+                    },
+                    template: `
+                        <div>
+                            <div class="etcd-tree-node" 
+                                 :class="{ 'selected': selectedKey === node.id }"
+                                 @click="selectNode">
+                                <div class="etcd-tree-toggle" @click.stop="toggleExpand" v-if="node.children">
+                                    <v-icon size="small">{{ expanded ? 'mdi-chevron-down' : 'mdi-chevron-right' }}</v-icon>
+                                </div>
+                                <div class="etcd-tree-toggle" v-else>&nbsp;</div>
+                                
+                                <v-icon size="small" class="etcd-tree-folder" v-if="node.children">mdi-folder</v-icon>
+                                <v-icon size="small" class="etcd-tree-file" v-else>mdi-file-document-outline</v-icon>
+                                
+                                <div class="etcd-tree-name">{{ node.name }}</div>
+                                <div class="etcd-tree-value" v-if="node.value">{{ node.value }}</div>
+                            </div>
+                            
+                            <div class="etcd-tree-children" v-if="node.children && expanded">
+                                <etcd-tree-node 
+                                    v-for="child in node.children" 
+                                    :key="child.id" 
+                                    :node="child"
+                                    :selected-key="selectedKey"
+                                    @node-click="$emit('node-click', $event)"
+                                />
+                            </div>
+                        </div>
+                    `
+                };
+
+                // 差异对比查看组件
+                const DiffViewer = {
+                    props: {
+                        oldValue: {
+                            type: String,
+                            default: ''
+                        },
+                        newValue: {
+                            type: String,
+                            default: ''
+                        }
+                    },
+                    setup(props) {
+                        const diffLines = computed(() => {
+                            if (!props.oldValue && !props.newValue) return [];
+                            
+                            const oldLines = props.oldValue.split('\n');
+                            const newLines = props.newValue.split('\n');
+                            const result = [];
+                            
+                            // 简单的行差异对比
+                            const maxLines = Math.max(oldLines.length, newLines.length);
+                            for (let i = 0; i < maxLines; i++) {
+                                const oldLine = i < oldLines.length ? oldLines[i] : null;
+                                const newLine = i < newLines.length ? newLines[i] : null;
+                                
+                                if (oldLine === newLine) {
+                                    result.push({ type: 'common', content: oldLine || '' });
+                                } else {
+                                    if (oldLine !== null) {
+                                        result.push({ type: 'removed', content: oldLine });
+                                    }
+                                    if (newLine !== null) {
+                                        result.push({ type: 'added', content: newLine });
+                                    }
+                                }
+                            }
+                            
+                            return result;
+                        });
+                        
+                        return { diffLines };
+                    },
+                    template: `
+                        <div v-if="diffLines.length === 0" class="text-center py-4">
+                            <v-alert type="info" text>No differences to display</v-alert>
+                        </div>
+                        <div v-else class="diff-viewer">
+                            <div 
+                                v-for="(line, index) in diffLines" 
+                                :key="index" 
+                                class="diff-line" 
+                                :class="{
+                                    'diff-added': line.type === 'added',
+                                    'diff-removed': line.type === 'removed',
+                                    'diff-common': line.type === 'common'
+                                }"
+                            >
+                                <span class="diff-marker">{{ line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' ' }}</span>
+                                {{ line.content }}
+                            </div>
+                        </div>
+                    `
+                };
+
+                const isLoggedIn = ref(false)
+                const currentUser = ref('')
+                const username = ref('')
+                const password = ref('')
+                const error = ref('')
+                const configError = ref('') // 用于实时显示配置验证错误
+                const loading = ref(false)
+                const treeStructure = ref([]) // 树形结构数据
+                const selectedKey = ref('')
+                const currentValue = ref('')
+                const search = ref('')
+                const snackbar = ref({
+                    show: false,
+                    text: '',
+                    color: 'success'
+                })
+                const activeTab = ref('tree')
+                const historyHeaders = ref([
+                    { title: 'Operation', key: 'operation', width: '100px' },
+                    { title: 'Key', key: 'key' },
+                    { title: 'User', key: 'user', width: '120px' },
+                    { title: 'Timestamp', key: 'timestamp', width: '180px' },
+                    { title: 'Actions', key: 'actions', width: '80px', sortable: false }
+                ])
+                const historyItems = ref([])
+                const operationLogs = ref([]) // 本地操作记录
+                
+                // 历史记录相关
+                const showFilters = ref(false)
+                const historyFilter = ref({
+                    operation: 'All',
+                    key: '',
+                    user: ''
+                })
+                const historyDialog = ref(false)
+                const selectedHistoryItem = ref(null)
+                const historyDetailTab = ref('diff')
+                
+                // 过滤后的历史记录
+                const filteredHistoryItems = computed(() => {
+                    if (!historyItems.value) return [];
+                    
+                    return historyItems.value.filter(item => {
+                        // 过滤操作类型
+                        if (historyFilter.value.operation !== 'All' && 
+                            item.operation !== historyFilter.value.operation) {
+                            return false;
+                        }
+                        
+                        // 过滤键
+                        if (historyFilter.value.key && 
+                            !item.key.toLowerCase().includes(historyFilter.value.key.toLowerCase())) {
+                            return false;
+                        }
+                        
+                        // 过滤用户
+                        if (historyFilter.value.user && 
+                            !item.user.toLowerCase().includes(historyFilter.value.user.toLowerCase())) {
+                            return false;
+                        }
+                        
+                        return true;
+                    });
+                })
+
+                const filteredTree = computed(() => {
+                    const result = search.value
+                        ? filterTree(deepClone(treeStructure.value), search.value.toLowerCase())
+                        : treeStructure.value;
+                    
+                    return result;
+                })
+
+                // 深拷贝函数
+                function deepClone(obj) {
+                    if (obj === null || typeof obj !== 'object') {
+                        return obj;
+                    }
+                    
+                    // 处理数组
+                    if (Array.isArray(obj)) {
+                        return obj.map(item => deepClone(item));
+                    }
+                    
+                    // 处理对象
+                    const copy = {};
+                    for (const key in obj) {
+                        if (Object.prototype.hasOwnProperty.call(obj, key)) {
+                            copy[key] = deepClone(obj[key]);
+                        }
+                    }
+                    return copy;
+                }
+
+                // 过滤树的函数
+                function filterTree(tree, searchText) {
+                    if (!tree) return []
+                    
+                    return tree.filter(node => {
+                        const nameMatch = node.name.toLowerCase().includes(searchText)
+                        const valueMatch = node.value && String(node.value).toLowerCase().includes(searchText)
+                        
+                        if (nameMatch || valueMatch) {
+                            return true
+                        }
+                        
+                        if (node.children && node.children.length > 0) {
+                            node.children = filterTree(node.children, searchText)
+                            return node.children.length > 0
+                        }
+                        
+                        return false
+                    })
+                }
+
+                // 从ETCD加载树形结构
+                async function loadTree() {
+                    try {
+                        loading.value = true
+                        const response = await axios.get('/api/etcd/')
+                        console.log('Raw data received:', response.data)
+                        
+                        // 如果有需要，也可以保留测试数据
+                        let testData = [
+                            { key: "/ops", value: "" },
+                            { key: "/ops/nginx", value: "" },
+                            { key: "/ops/nginx/conf", value: "server { listen 80; }" },
+                            { key: "/app", value: "" },
+                            { key: "/app/config", value: "debug=true" },
+                            { key: "/database", value: "" },
+                            { key: "/database/mysql", value: "password=secret" }
+                        ];
+                        
+                        // 使用测试数据构建树
+                        treeStructure.value = buildTree(testData);
+                        console.log('Test tree structure:', treeStructure.value);
+                        
+                        // 处理真实数据
+                        let data;
+                        if (Array.isArray(response.data)) {
+                            data = response.data;
+                        } else if (typeof response.data === 'object') {
+                            data = convertObjectToArray(response.data);
+                        } else {
+                            data = [];
+                        }
+                        
+                        if (data && data.length > 0) {
+                            console.log('Converted data:', data);
+                            const realTree = buildTree(data);
+                            console.log('Real tree structure:', realTree);
+                            
+                            if (realTree && realTree.length > 0) {
+                                treeStructure.value = realTree;
+                            }
+                        }
+                    } catch (err) {
+                        console.error('Load tree error:', err)
+                        showError('Failed to load configuration')
+                        if (err.response?.status === 401) {
+                            logout()
+                        }
+                    } finally {
+                        loading.value = false
+                    }
+                }
+                
+                // 重置搜索，使树显示完整结构
+                function resetSearch() {
+                    if (search.value) {
+                        search.value = '';
+                        // 可以添加一个延迟，让UI有时间更新
+                        setTimeout(() => {
+                            // 强制更新计算属性
+                            treeStructure.value = [...treeStructure.value];
+                        }, 50);
+                    }
+                }
+                
+                // 将对象转换为键值对数组
+                function convertObjectToArray(obj, parentKey = '') {
+                    const result = []
+                    
+                    for (const [key, value] of Object.entries(obj)) {
+                        const fullKey = parentKey ? `${parentKey}/${key}` : `/${key}`
+                        
+                        if (value && typeof value === 'object' && !Array.isArray(value)) {
+                            if (Object.keys(value).length === 0) {
+                                // 空对象作为空值处理
+                                result.push({ key: fullKey, value: '' })
+                            } else {
+                                // 遍历子对象
+                                result.push(...convertObjectToArray(value, fullKey))
+                                
+                                // 特殊处理：如果本身就是目录节点，也添加一个条目
+                                if (key !== 'children') {
+                                    result.push({ key: fullKey, value: '' })
+                                }
+                            }
+                        } else {
+                            // 添加叶子节点
+                            result.push({ 
+                                key: fullKey, 
+                                value: value === null ? '' : (typeof value === 'object' ? JSON.stringify(value) : String(value))
+                            })
+                        }
+                    }
+                    
+                    return result
+                }
+                
+                // 构建树形结构
+                function buildTree(data) {
+                    console.log('Building tree from data:', data);
+                    const root = []
+                    const nodeMap = {}
+                    
+                    // 第一遍：创建所有节点
+                    data.forEach(item => {
+                        if (!item.key) return
+                        console.log('Processing item:', item);
+                        
+                        const parts = item.key.split('/').filter(Boolean)
+                        let currentPath = ''
+                        
+                        // 处理每一层路径
+                        parts.forEach((part, index) => {
+                            const isLast = index === parts.length - 1
+                            const prevPath = currentPath
+                            currentPath = prevPath ? `${prevPath}/${part}` : `/${part}`
+                            console.log(`Path part: ${part}, currentPath: ${currentPath}, isLast: ${isLast}`);
+                            
+                            // 如果节点还不存在，创建它
+                            if (!nodeMap[currentPath]) {
+                                const node = {
+                                    id: currentPath,
+                                    name: part
+                                }
+                                
+                                // 如果是叶子节点，添加值
+                                if (isLast && item.value !== undefined) {
+                                    node.value = item.value
+                                    console.log(`Setting value for node ${currentPath}:`, item.value);
+                                }
+                                
+                                // 所有节点都先添加一个空的children数组，后面再清理
+                                node.children = []
+                                
+                                nodeMap[currentPath] = node
+                                
+                                // 如果是根节点，添加到根数组
+                                if (index === 0) {
+                                    root.push(node)
+                                } else {
+                                    // 否则添加到父节点
+                                    const parentNode = nodeMap[prevPath]
+                                    if (parentNode) {
+                                        parentNode.children.push(node)
+                                    }
+                                }
+                            } else if (isLast && item.value !== undefined) {
+                                // 如果节点已存在但这是值节点，更新值
+                                nodeMap[currentPath].value = item.value
+                                console.log(`Updating value for node ${currentPath}:`, item.value);
+                            }
+                        })
+                    })
+                    
+                    // 清理空的children数组
+                    const cleanEmptyChildren = (nodes) => {
+                        if (!nodes) return
+                        
+                        for (let i = 0; i < nodes.length; i++) {
+                            const node = nodes[i]
+                            if (node.children && node.children.length === 0) {
+                                delete node.children
+                            } else if (node.children) {
+                                cleanEmptyChildren(node.children)
+                            }
+                        }
+                    }
+                    
+                    cleanEmptyChildren(root)
+                    console.log('Final tree structure:', JSON.stringify(root, null, 2));
+                    window.debugTree = root // 方便在控制台调试
+                    return root
+                }
+
+                function handleNodeSelect(node) {
+                    // 如果节点是在搜索结果中选择的，但我们希望在树中高亮显示它，
+                    // 可能需要清除搜索并展开到该节点
+                    if (search.value && confirm('清除搜索并选择此节点?')) {
+                        resetSearch();
+                    }
+                    
+                    selectedKey.value = node.id;
+                    currentValue.value = node.value || '';
+                    
+                    // 选择节点后进行实时验证
+                    validateConfigRealtime();
+                }
+
+                async function login() {
+                    loading.value = true
+                    error.value = ''
+                    try {
+                        const response = await axios.post('/login', {
+                            username: username.value,
+                            password: password.value
+                        })
+                        isLoggedIn.value = true
+                        currentUser.value = username.value
+                        localStorage.setItem('isLoggedIn', 'true')
+                        localStorage.setItem('currentUser', username.value)
+                        // 登录成功后立即加载数据
+                        await loadTree()
+                    } catch (err) {
+                        error.value = err.response?.data?.error || 'Login failed'
+                        isLoggedIn.value = false
+                    } finally {
+                        loading.value = false
+                    }
+                }
+
+                async function logout() {
+                    loading.value = true
+                    try {
+                        await axios.post('/logout')
+                        isLoggedIn.value = false
+                        currentUser.value = ''
+                        selectedKey.value = ''
+                        currentValue.value = ''
+                        localStorage.removeItem('isLoggedIn')
+                        localStorage.removeItem('currentUser')
+                    } catch (err) {
+                        console.error('Logout failed:', err)
+                    } finally {
+                        loading.value = false
+                    }
+                }
+
+                // 实时验证配置格式
+                function validateConfigRealtime() {
+                    // 清除之前的错误
+                    configError.value = '';
+                    
+                    // 如果没有选择key或没有值，不进行验证
+                    if (!selectedKey.value || !currentValue.value) {
+                        return;
+                    }
+                    
+                    // 检查是否需要验证
+                    const errors = validateConfigFormat(selectedKey.value, currentValue.value);
+                    if (errors) {
+                        configError.value = errors;
+                    }
+                }
+
+                // 根据key路径验证配置格式
+                function validateConfigFormat(key, value) {
+                    if (!key || !value) return null;
+                    
+                    // 判断配置类型
+                    if (key.includes('/nginx/')) {
+                        return validateNginxConfig(value);
+                    } else if (key.includes('/coredns/')) {
+                        return validateCoreDNSConfig(value);
+                    }
+                    
+                    return null; // 不需要验证的配置类型
+                }
+                
+                // 验证Nginx配置格式
+                function validateNginxConfig(config) {
+                    const errors = [];
+                    
+                    // 检查大括号匹配
+                    let braceCount = 0;
+                    for (let i = 0; i < config.length; i++) {
+                        if (config[i] === '{') braceCount++;
+                        if (config[i] === '}') braceCount--;
+                        if (braceCount < 0) {
+                            errors.push("括号不匹配: 存在多余的 '}'");
+                            break;
+                        }
+                    }
+                    if (braceCount !== 0) {
+                        errors.push("括号不匹配: 缺少 '}'");
+                    }
+                    
+                    // 检查分号
+                    const lines = config.split('\n');
+                    for (let i = 0; i < lines.length; i++) {
+                        const line = lines[i].trim();
+                        // 忽略空行、注释和大括号行
+                        if (!line || line.startsWith('#') || line === '{' || line === '}') {
+                            continue;
+                        }
+                        // 检查分号结尾
+                        if (!line.endsWith(';') && !line.endsWith('{')) {
+                            errors.push(`第 ${i+1} 行缺少分号结尾: ${line}`);
+                        }
+                    }
+                    
+                    // 检查server区块
+                    if (config.length > 0 && !config.includes('server') && !config.includes('upstream') && !config.includes('location')) {
+                        errors.push("配置缺少必要的server、upstream或location区块");
+                    }
+                    
+                    return errors.length > 0 ? `Nginx配置错误:\n${errors.join('\n')}` : null;
+                }
+                
+                // 验证CoreDNS配置格式
+                function validateCoreDNSConfig(config) {
+                    const errors = [];
+                    
+                    // 检查大括号匹配
+                    let braceCount = 0;
+                    for (let i = 0; i < config.length; i++) {
+                        if (config[i] === '{') braceCount++;
+                        if (config[i] === '}') braceCount--;
+                        if (braceCount < 0) {
+                            errors.push("括号不匹配: 存在多余的 '}'");
+                            break;
+                        }
+                    }
+                    if (braceCount !== 0) {
+                        errors.push("括号不匹配: 缺少 '}'");
+                    }
+                    
+                    // 检查基本指令
+                    const commonPlugins = ['errors', 'health', 'ready', 'prometheus', 'cache', 'forward', 'file', 'auto', 'secondary', 'loop', 'reload'];
+                    const hasPlugin = commonPlugins.some(plugin => config.includes(plugin));
+                    
+                    if (!hasPlugin) {
+                        errors.push("配置似乎缺少常见的CoreDNS插件指令");
+                    }
+                    
+                    // 检查域名格式
+                    const domainRegex = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$/;
+                    const lines = config.split('\n');
+                    for (let i = 0; i < lines.length; i++) {
+                        const line = lines[i].trim();
+                        // 忽略空行、注释和大括号行
+                        if (!line || line.startsWith('#') || line === '{' || line === '}') {
+                            continue;
+                        }
+                        
+                        // 检查可能的域名（行首的单词）
+                        const firstWord = line.split(' ')[0];
+                        if (firstWord && firstWord !== '.' && !firstWord.startsWith('$') && 
+                            !commonPlugins.includes(firstWord) && !domainRegex.test(firstWord)) {
+                            errors.push(`第 ${i+1} 行可能包含无效域名: ${firstWord}`);
+                        }
+                    }
+                    
+                    return errors.length > 0 ? `CoreDNS配置错误:\n${errors.join('\n')}` : null;
+                }
+
+                // 添加创建新节点的函数
+                function createNewKey() {
+                    // 设置一个默认的新节点路径，可以基于当前选中的节点或根路径
+                    const basePath = selectedKey.value ? selectedKey.value : '';
+                    const defaultPath = basePath + (basePath.endsWith('/') ? '' : '/') + 'new_key';
+                    
+                    // 使用对话框代替简单的prompt
+                    const newKeyDialog = {
+                        show: true,
+                        path: defaultPath,
+                        value: '',
+                        ttl: -1, // -1表示无限制
+                        customTtl: 300, // 默认5分钟
+                        submit: function() {
+                            if (!this.path) {
+                                alert('请输入有效的配置路径');
+                                return;
+                            }
+                            
+                            // 设置选中的节点和值
+                            selectedKey.value = this.path;
+                            currentValue.value = this.value;
+                            
+                            // 计算实际的TTL值
+                            let actualTtl = this.ttl;
+                            if (this.ttl === 0 && this.customTtl > 0) {
+                                actualTtl = this.customTtl;
+                            }
+                            
+                            // 重置搜索
+                            resetSearch();
+                            
+                            // 验证配置
+                            validateConfigRealtime();
+                            
+                            // 如果验证通过，自动保存
+                            if (!configError.value) {
+                                // 创建新键时明确传递Create标志
+                                saveNewKey(this.path, this.value, actualTtl);
+                            }
+                            
+                            // 关闭对话框
+                            newKeyDialogVisible.value = false;
+                        }
+                    };
+                    
+                    // 显示对话框
+                    newKeyData.value = newKeyDialog;
+                    newKeyDialogVisible.value = true;
+                }
+
+                // 添加专用的创建新键函数，确保操作类型为Create
+                async function saveNewKey(key, value, ttl = -1) {
+                    loading.value = true;
+                    try {
+                        // 验证格式
+                        const errors = validateConfigFormat(key, value);
+                        if (errors) {
+                            showError(errors);
+                            loading.value = false;
+                            return;
+                        }
+                        
+                        // 准备请求数据
+                        const requestData = {
+                            value: value
+                        };
+                        
+                        // 处理TTL
+                        if (ttl > 0) {
+                            requestData.ttl = ttl;
+                            console.log(`Creating new key with TTL: ${ttl} seconds`);
+                        } else if (ttl === 0) {
+                            requestData.ttl = 300; // 默认5分钟
+                            console.log(`Creating new key with default TTL: 300 seconds`);
+                        }
+                        
+                        // 保存值
+                        await axios.put(`/api/etcd${key}`, requestData);
+                        console.log(`Creating new key: ${key} with value: ${value}`);
+                        
+                        // 记录创建操作
+                        const logEntry = {
+                            operation: 'Create', // 明确标记为创建操作
+                            key: key,
+                            user: currentUser.value,
+                            timestamp: new Date().toISOString(),
+                            old_value: '', // 新建的键没有旧值
+                            new_value: value,
+                            ttl: ttl > 0 ? ttl : -1
+                        };
+                        
+                        try {
+                            // 添加操作记录
+                            const logResponse = await axios.post('/api/operation_logs', logEntry);
+                            console.log('Create operation log saved to server:', logResponse.data);
+                        } catch (logError) {
+                            console.error('Failed to save create operation log to server:', logError);
+                            
+                            // 保存到本地存储作为备份
+                            try {
+                                const pendingLogs = JSON.parse(localStorage.getItem('pendingOperationLogs') || '[]');
+                                pendingLogs.push({
+                                    ...logEntry,
+                                    localId: `create-${key}-${Date.now()}`
+                                });
+                                localStorage.setItem('pendingOperationLogs', JSON.stringify(pendingLogs));
+                                console.log('Saved create log to local storage as backup');
+                            } catch (localErr) {
+                                console.error('Failed to save to local storage:', localErr);
+                            }
+                        }
+                        
+                        // 显示成功消息
+                        if (ttl > 0) {
+                            showSuccess(`Key created successfully with TTL of ${formatTTL(ttl)}`);
+                        } else {
+                            showSuccess('Key created successfully');
+                        }
+                        
+                        // 刷新树，确保能看到更新
+                        await loadTree();
+                        
+                        // 选中新创建的节点
+                        selectedKey.value = key;
+                        currentValue.value = value;
+                        
+                        // 如果当前是历史记录标签页，刷新历史记录
+                        if (activeTab.value === 'history') {
+                            loadHistory();
+                        }
+                    } catch (err) {
+                        console.error('Create key error:', err);
+                        showError(err.response?.data?.error || 'Failed to create key');
+                    } finally {
+                        loading.value = false;
+                    }
+                }
+
+                // 修改saveValue函数，增加TTL参数，并修复更新记录的问题
+                async function saveValue(ttl = -1) {
+                    loading.value = true;
+                    try {
+                        // 再次验证格式，以防万一
+                        const errors = validateConfigFormat(selectedKey.value, currentValue.value);
+                        if (errors) {
+                            showError(errors);
+                            loading.value = false;
+                            return;
+                        }
+                        
+                        // 获取旧值用于记录
+                        let oldValue = '';
+                        let operationType = 'Create'; // 默认为创建
+                        
+                        try {
+                            // 获取当前值，判断是更新还是创建
+                            const response = await axios.get(`/api/etcd${selectedKey.value}`);
+                            console.log('Get current value before save:', response);
+                            
+                            // 尝试多种可能的格式获取当前值
+                            if (response.data) {
+                                if (typeof response.data === 'object') {
+                                    // 可能是嵌套对象
+                                    const keyName = selectedKey.value.split('/').pop();
+                                    if (keyName && response.data[keyName]) {
+                                        oldValue = response.data[keyName];
+                                    } else if (response.data.value) {
+                                        oldValue = response.data.value;
+                                    } else {
+                                        // 尝试将整个对象作为值
+                                        oldValue = JSON.stringify(response.data);
+                                    }
+                                } else if (typeof response.data === 'string') {
+                                    oldValue = response.data;
+                                }
+                                
+                                // 判断是否真正获取到值，且不为空
+                                const isValueEmpty = !oldValue || oldValue.trim() === '' || oldValue === '{}' || oldValue === '[]';
+                                
+                                // 只有当获取到了非空的值，操作类型才为更新
+                                if (oldValue && !isValueEmpty) {
+                                    operationType = 'Update';
+                                    console.log(`Key ${selectedKey.value} exists with value: "${oldValue}", operation will be Update`);
+                                } else {
+                                    operationType = 'Create';
+                                    console.log(`Key ${selectedKey.value} exists but has empty value, operation will be Create`);
+                                }
+                            }
+                        } catch (e) {
+                            // 如果获取失败，可能是Key不存在，操作类型为创建
+                            console.log(`Failed to get existing value for ${selectedKey.value}, assuming Create operation:`, e);
+                            operationType = 'Create';
+                        }
+                        
+                        // 准备请求数据
+                        const requestData = {
+                            value: currentValue.value
+                        };
+                        
+                        // 仅当TTL > 0时才发送，为了兼容后端可能不支持TTL的情况
+                        if (ttl > 0) {
+                            requestData.ttl = ttl;
+                            console.log(`Setting value with TTL: ${ttl} seconds`);
+                        } else if (ttl === 0) {
+                            // 自定义TTL但值为0的情况，使用默认TTL
+                            requestData.ttl = 300; // 默认5分钟
+                            console.log(`Setting value with default TTL: 300 seconds`);
+                        }
+                        
+                        // 保存值
+                        await axios.put(`/api/etcd${selectedKey.value}`, requestData);
+                        
+                        // 输出详细日志
+                        console.log(`Operation: ${operationType}, Key: ${selectedKey.value}, OldValue: ${oldValue}, NewValue: ${currentValue.value}`);
+                        
+                        // 准备日志记录对象
+                        const logEntry = {
+                            operation: operationType,
+                            key: selectedKey.value,
+                            user: currentUser.value,
+                            timestamp: new Date().toISOString(),
+                            old_value: oldValue,
+                            new_value: currentValue.value,
+                            ttl: ttl > 0 ? ttl : -1
+                        };
+                        
+                        try {
+                            // 添加操作记录
+                            const logResponse = await axios.post('/api/operation_logs', logEntry);
+                            console.log('Operation log saved to server:', logResponse.data);
+                        } catch (logError) {
+                            console.error('Failed to save operation log to server:', logError);
+                            
+                            // 保存到本地存储作为备份
+                            try {
+                                const pendingLogs = JSON.parse(localStorage.getItem('pendingOperationLogs') || '[]');
+                                pendingLogs.push({
+                                    ...logEntry,
+                                    localId: `${operationType.toLowerCase()}-${selectedKey.value}-${Date.now()}`
+                                });
+                                localStorage.setItem('pendingOperationLogs', JSON.stringify(pendingLogs));
+                                console.log('Saved operation log to local storage as backup');
+                            } catch (localErr) {
+                                console.error('Failed to save to local storage:', localErr);
+                            }
+                        }
+                        
+                        // 显示成功消息，包含TTL信息
+                        if (ttl > 0) {
+                            showSuccess(`Value ${operationType === 'Create' ? 'created' : 'updated'} successfully with TTL of ${formatTTL(ttl)}`);
+                        } else {
+                            showSuccess(`Value ${operationType === 'Create' ? 'created' : 'updated'} successfully`);
+                        }
+                        
+                        // 刷新树，确保能看到更新
+                        await loadTree();
+                        
+                        // 更新树节点的值 - 即使loadTree失败也确保UI更新
+                        updateNodeValueInTree(treeStructure.value, selectedKey.value, currentValue.value);
+                        
+                        // 如果当前是历史记录标签页，刷新历史记录
+                        if (activeTab.value === 'history') {
+                            loadHistory();
+                        }
+                    } catch (err) {
+                        console.error('Save error:', err);
+                        showError(err.response?.data?.error || 'Failed to save value');
+                    } finally {
+                        loading.value = false;
+                    }
+                }
+                
+                // 格式化TTL显示
+                function formatTTL(seconds) {
+                    if (seconds < 0) return 'No expiration';
+                    if (seconds < 60) return `${seconds} seconds`;
+                    if (seconds < 3600) return `${Math.floor(seconds/60)} minutes`;
+                    if (seconds < 86400) return `${Math.floor(seconds/3600)} hours`;
+                    return `${Math.floor(seconds/86400)} days`;
+                }
+
+                // 更新树中节点的值
+                function updateNodeValueInTree(nodes, keyToUpdate, newValue) {
+                    if (!nodes) return false;
+                    
+                    for (let i = 0; i < nodes.length; i++) {
+                        const node = nodes[i];
+                        if (node.id === keyToUpdate) {
+                            // 找到节点，更新值
+                            node.value = newValue;
+                            return true;
+                        }
+                        
+                        // 递归搜索子节点
+                        if (node.children && updateNodeValueInTree(node.children, keyToUpdate, newValue)) {
+                            return true;
+                        }
+                    }
+                    
+                    return false;
+                }
+
+                // 修改删除节点的代码，确保保存到历史记录
+                async function deleteKey() {
+                    if (!confirm('Are you sure you want to delete this key?')) return;
+                    
+                    const keyToDelete = selectedKey.value; // 保存当前选中的键，以防后续操作改变它
+                    loading.value = true;
+                    
+                    try {
+                        // 获取旧值用于记录
+                        let oldValue = '';
+                        try {
+                            const response = await axios.get(`/api/etcd${keyToDelete}`);
+                            console.log('Get value before delete:', response);
+                            
+                            if (response.data && typeof response.data === 'object') {
+                                // 处理对象响应
+                                const keyName = keyToDelete.split('/').pop();
+                                if (keyName && response.data[keyName]) {
+                                    oldValue = response.data[keyName];
+                                } else if (response.data.value) {
+                                    oldValue = response.data.value;
+                                } else {
+                                    // 尝试将整个对象作为值
+                                    oldValue = JSON.stringify(response.data);
+                                }
+                            } else if (response.data && response.data.value) {
+                                // 处理统一结构
+                                oldValue = response.data.value;
+                            } else if (typeof response.data === 'string') {
+                                // 直接字符串响应
+                                oldValue = response.data;
+                            }
+                            
+                            if (!oldValue && currentValue.value) {
+                                oldValue = currentValue.value; // 使用当前编辑框的值作为备份
+                            }
+                        } catch (e) {
+                            console.error('Failed to get old value:', e);
+                            // 使用当前编辑框的值作为备份
+                            if (currentValue.value) {
+                                oldValue = currentValue.value;
+                            }
+                        }
+                        
+                        console.log(`Deleting key: ${keyToDelete}, oldValue: ${oldValue}`);
+                        
+                        // 删除键
+                        await axios.delete(`/api/etcd${keyToDelete}`);
+                        
+                        // 确保值不为空，如果API没获取到，使用当前值 
+                        const finalOldValue = oldValue || currentValue.value || '(empty value)';
+                        
+                        // 准备记录条目
+                        const logEntry = {
+                            operation: 'Delete',
+                            key: keyToDelete,
+                            user: currentUser.value,
+                            timestamp: new Date().toISOString(),
+                            old_value: finalOldValue,
+                            new_value: ''
+                        };
+                        
+                        // 标识这次删除操作
+                        const deleteId = `delete-${keyToDelete}-${Date.now()}`;
+                        
+                        // 尝试通过API保存到服务器
+                        let savedToServer = false;
+                        try {
+                            // 记录删除操作到SQLite数据库，保存原值
+                            const logResponse = await axios.post('/api/operation_logs', logEntry);
+                            console.log('Delete operation log saved to server:', logResponse.data);
+                            savedToServer = true;
+                        } catch (logError) {
+                            console.error('Failed to save delete operation log to server:', logError);
+                            savedToServer = false;
+                        }
+                        
+                        // 仅当服务器保存失败时，才保存到本地存储
+                        if (!savedToServer) {
+                            try {
+                                const pendingLogs = JSON.parse(localStorage.getItem('pendingOperationLogs') || '[]');
+                                
+                                // 添加标识，避免重复
+                                const logEntryWithId = {...logEntry, localId: deleteId};
+                                pendingLogs.push(logEntryWithId);
+                                localStorage.setItem('pendingOperationLogs', JSON.stringify(pendingLogs));
+                                console.log('Saved delete log to local storage as backup', logEntryWithId);
+                            } catch (localErr) {
+                                console.error('Failed to save to local storage:', localErr);
+                            }
+                        }
+                        
+                        showSuccess('Key deleted successfully');
+                        selectedKey.value = '';
+                        currentValue.value = '';
+                        
+                        // 重置搜索框，确保能看到完整的树结构
+                        resetSearch();
+                        
+                        // 从树结构中移除节点
+                        removeNodeFromTree(treeStructure.value, keyToDelete);
+                        
+                        // 然后再刷新树以确保同步
+                        await loadTree();
+                        
+                        // 无论活跃标签是什么，都刷新历史记录以确保它包含最新的删除操作
+                        await loadHistory();
+                    } catch (err) {
+                        console.error('Delete error:', err);
+                        showError(err.response?.data?.error || 'Failed to delete key');
+                    } finally {
+                        loading.value = false;
+                    }
+                }
+                
+                // 从树中移除节点
+                function removeNodeFromTree(nodes, keyToRemove) {
+                    if (!nodes) return false;
+                    
+                    // 如果当前有搜索过滤，需要在原始树上操作，而不是过滤后的树
+                    const currentNodes = nodes;
+                    
+                    for (let i = 0; i < currentNodes.length; i++) {
+                        if (currentNodes[i].id === keyToRemove) {
+                            // 找到要删除的节点，从数组中移除
+                            currentNodes.splice(i, 1);
+                            return true;
+                        }
+                        
+                        // 递归搜索子节点
+                        if (currentNodes[i].children && removeNodeFromTree(currentNodes[i].children, keyToRemove)) {
+                            // 如果子节点移除成功，检查当前节点是否变为空
+                            if (currentNodes[i].children.length === 0) {
+                                delete currentNodes[i].children;
+                            }
+                            return true;
+                        }
+                    }
+                    
+                    return false;
+                }
+
+                function showSuccess(text) {
+                    snackbar.value = {
+                        show: true,
+                        text,
+                        color: 'success'
+                    }
+                }
+
+                function showError(text) {
+                    snackbar.value = {
+                        show: true,
+                        text,
+                        color: 'error'
+                    }
+                }
+
+                async function checkAuthStatus() {
+                    try {
+                        const response = await axios.get('/api/auth/status')
+                        isLoggedIn.value = response.data.loggedIn
+                        if (isLoggedIn.value) {
+                            currentUser.value = response.data.user
+                            await loadTree()
+                        }
+                    } catch (err) {
+                        console.error('Auth check failed:', err)
+                        logout()
+                    }
+                }
+
+                // Tab切换时自动加载数据
+                function handleTabChange(tab) {
+                    console.log('Tab changed to:', tab);
+                    if (tab === 'history') {
+                        loadHistory();
+                    }
+                }
+
+                // 监听标签页变化
+                watch(activeTab, (newTab) => {
+                    handleTabChange(newTab);
+                });
+
+                async function loadHistory() {
+                    try {
+                        loading.value = true;
+                        console.log('Loading history data...');
+                        
+                        // 初始化结果数组
+                        let allHistoryItems = [];
+                        
+                        // 用于去重的键集合
+                        const uniqueKeys = new Set();
+                        
+                        // 帮助函数：如果记录不存在则添加
+                        const addUniqueItem = (item) => {
+                            const key = `${item.operation}-${item.key}-${item.timestamp}`;
+                            if (!uniqueKeys.has(key)) {
+                                allHistoryItems.push(item);
+                                uniqueKeys.add(key);
+                                return true;
+                            }
+                            return false;
+                        };
+                        
+                        // 1. 先尝试获取API数据
+                        try {
+                            console.log('Fetching history from API...');
+                            const response = await axios.get('/api/operation_logs');
+                            
+                            if (response.data && response.data.logs && Array.isArray(response.data.logs)) {
+                                console.log('API returned', response.data.logs.length, 'records');
+                                
+                                // 转换并添加API数据
+                                response.data.logs.forEach(log => {
+                                    const item = {
+                                        operation: log.operation,
+                                        timestamp: log.timestamp,
+                                        key: log.key,
+                                        user: log.user || 'unknown',
+                                        oldValue: log.old_value || log.oldValue || log.old || '',
+                                        newValue: log.new_value || log.newValue || log.new || ''
+                                    };
+                                    
+                                    // 对于Create操作，确保旧值为空
+                                    if (log.operation === 'Create') {
+                                        item.oldValue = '';
+                                    }
+                                    
+                                    // 对于删除操作，尝试从各个字段获取旧值
+                                    if (log.operation === 'Delete' && !item.oldValue) {
+                                        if (log.value) item.oldValue = log.value;
+                                        else if (log.data) item.oldValue = log.data;
+                                        else if (log.content) item.oldValue = log.content;
+                                    }
+                                    
+                                    addUniqueItem(item);
+                                });
+                            }
+                        } catch (apiError) {
+                            console.warn('Failed to fetch from API:', apiError);
+                        }
+                        
+                        // 2. 然后尝试获取本地存储数据 (仅当API获取失败或数据不足时补充)
+                        try {
+                            const pendingLogs = JSON.parse(localStorage.getItem('pendingOperationLogs') || '[]');
+                            if (pendingLogs.length > 0) {
+                                console.log('Found', pendingLogs.length, 'logs in local storage');
+                                
+                                pendingLogs.forEach(log => {
+                                    const item = {
+                                        operation: log.operation,
+                                        timestamp: log.timestamp,
+                                        key: log.key,
+                                        user: log.user || currentUser.value,
+                                        oldValue: log.old_value || log.oldValue || '',
+                                        newValue: log.new_value || log.newValue || '',
+                                        // 保留本地ID以帮助调试
+                                        localId: log.localId || null
+                                    };
+                                    
+                                    addUniqueItem(item);
+                                });
+                            }
+                        } catch (localError) {
+                            console.error('Failed to load from local storage:', localError);
+                        }
+                        
+                        // 3. 如果没有任何数据，添加一些测试数据
+                        if (allHistoryItems.length === 0) {
+                            console.log('No history data found, using test data');
+                            
+                            // 测试数据
+                            const testData = [
+                                {
+                                    operation: 'Create',
+                                    timestamp: new Date().toISOString(),
+                                    key: '/test/config1',
+                                    user: 'admin',
+                                    oldValue: '',
+                                    newValue: 'test value 1'
+                                },
+                                {
+                                    operation: 'Update',
+                                    timestamp: new Date(Date.now() - 1000*60).toISOString(),
+                                    key: '/test/config1',
+                                    user: 'admin',
+                                    oldValue: 'test value 1',
+                                    newValue: 'updated value'
+                                },
+                                {
+                                    operation: 'Delete',
+                                    timestamp: new Date(Date.now() - 1000*60*5).toISOString(),
+                                    key: '/test/config2',
+                                    user: 'admin',
+                                    oldValue: 'deleted value',
+                                    newValue: ''
+                                }
+                            ];
+                            
+                            testData.forEach(item => addUniqueItem(item));
+                        }
+                        
+                        // 4. 按时间排序
+                        allHistoryItems.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                        
+                        // 更新状态
+                        historyItems.value = allHistoryItems;
+                        console.log('Final history items:', historyItems.value.length);
+                        
+                        // 调试输出一些删除记录
+                        const deleteItems = historyItems.value.filter(item => item.operation === 'Delete');
+                        if (deleteItems.length > 0) {
+                            console.log('Delete records:', deleteItems.length);
+                            deleteItems.forEach((item, index) => {
+                                if (index < 3) { // 只输出前3条，避免日志过长
+                                    console.log(`Delete record ${index+1}:`, item);
+                                }
+                            });
+                        } else {
+                            console.log('No delete records found');
+                        }
+                    } catch (err) {
+                        console.error('History loading error:', err);
+                        historyItems.value = [
+                            {
+                                operation: 'Error',
+                                timestamp: new Date().toISOString(),
+                                key: 'Error loading history',
+                                user: 'system',
+                                oldValue: '',
+                                newValue: err.message || 'Unknown error'
+                            }
+                        ];
+                    } finally {
+                        loading.value = false;
+                    }
+                }
+
+                function getOperationColor(operation) {
+                    switch (operation) {
+                        case 'Create':
+                            return 'success'
+                        case 'Update':
+                            return 'info'
+                        case 'Delete':
+                            return 'error'
+                        default:
+                            return 'primary'
+                    }
+                }
+
+                function formatDate(timestamp) {
+                    const date = new Date(timestamp)
+                    return date.toLocaleString()
+                }
+
+                function debugData() {
+                    console.log('Current tree structure:', treeStructure.value);
+                    alert('Tree structure data:\n' + JSON.stringify(treeStructure.value, null, 2));
+                }
+
+                // 查看历史记录详情，调整以确保处理删除操作
+                function viewHistoryDetails(item) {
+                    console.log('Viewing history details:', item);
+                    console.log('Old value:', item.oldValue);
+                    console.log('New value:', item.newValue);
+                    
+                    selectedHistoryItem.value = item;
+                    
+                    // 如果是删除操作，默认显示old值标签页
+                    if (item.operation === 'Delete') {
+                        historyDetailTab.value = 'old';
+                    } else {
+                        historyDetailTab.value = 'diff';
+                    }
+                    
+                    historyDialog.value = true;
+                }
+                
+                // 清除过滤器
+                function clearFilters() {
+                    historyFilter.value = {
+                        operation: 'All',
+                        key: '',
+                        user: ''
+                    };
+                    loadHistory();
+                }
+
+                // 在Vue的setup中添加一个刷新按钮的处理函数
+                function refreshTree() {
+                    // 清除搜索和选择状态
+                    resetSearch();
+                    selectedKey.value = '';
+                    currentValue.value = '';
+                    
+                    // 重新加载树
+                    loadTree();
+                }
+
+                // 创建新键对话框
+                const newKeyDialogVisible = ref(false);
+                const newKeyData = ref(null);
+
+                // 用于截断显示的文本
+                function truncateText(text, maxLength) {
+                    if (!text) return '';
+                    if (text.length <= maxLength) return text;
+                    return text.substring(0, maxLength) + '...';
+                }
+
+                onMounted(async () => {
+                    // 检查待同步的本地操作记录
+                    try {
+                        const pendingLogs = localStorage.getItem('pendingOperationLogs');
+                        if (pendingLogs) {
+                            const logs = JSON.parse(pendingLogs);
+                            console.log('Found pending operation logs:', logs.length);
+                            
+                            // 可以选择尝试将这些记录同步到SQLite
+                            // 但这需要后端提供相应的批量导入API
+                        }
+                    } catch (e) {
+                        console.error('Failed to process pending operation logs:', e);
+                    }
+                    
+                    // 检查本地存储的登录状态
+                    if (localStorage.getItem('isLoggedIn')) {
+                        isLoggedIn.value = true;
+                        currentUser.value = localStorage.getItem('currentUser');
+                        // 如果已登录，立即加载数据
+                        await loadTree();
+                        
+                        // 预加载历史记录
+                        if (activeTab.value === 'history') {
+                            loadHistory();
+                        }
+                    }
+                    checkAuthStatus();
+                })
+
+                return {
+                    isLoggedIn,
+                    currentUser,
+                    username,
+                    password,
+                    error,
+                    configError,
+                    loading,
+                    treeStructure,
+                    filteredTree,
+                    selectedKey,
+                    currentValue,
+                    search,
+                    snackbar,
+                    login,
+                    logout,
+                    handleNodeSelect,
+                    saveValue,
+                    deleteKey,
+                    loadTree,
+                    resetSearch,
+                    refreshTree,
+                    deepClone,
+                    createNewKey,
+                    newKeyDialogVisible,
+                    newKeyData,
+                    formatTTL,
+                    truncateText,
+                    activeTab,
+                    historyHeaders,
+                    historyItems,
+                    loadHistory,
+                    getOperationColor,
+                    formatDate,
+                    debugData,
+                    EtcdTreeNode,
+                    validateConfigRealtime,
+                    handleTabChange,
+                    // 历史记录相关
+                    showFilters,
+                    historyFilter,
+                    filteredHistoryItems,
+                    clearFilters,
+                    historyDialog,
+                    selectedHistoryItem,
+                    historyDetailTab,
+                    viewHistoryDetails,
+                    DiffViewer
+                }
+            }
+        }
+
+        const app = createApp(App)
+        app.use(vuetify)
+        // 注册组件
+        app.component('etcd-tree-node', App.setup().EtcdTreeNode)
+        app.component('diff-viewer', App.setup().DiffViewer)
+        app.mount('#app')
+    </script>
+</body>
+</html> 
