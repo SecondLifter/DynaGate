@@ -68,7 +68,7 @@ func (h *Handler) Login(c *gin.Context) {
 	}
 
 	// 添加测试账户
-	if req.Username == "admin" && req.Password == "admin123" {
+	if req.Username == "admin" && req.Password == "Cy5#*d9E7G" {
 		session := sessions.Default(c)
 		session.Set("user", req.Username)
 		session.Save()
