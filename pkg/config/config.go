@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"gopkg.in/yaml.v3"
+	"io/ioutil"
 )
 
 // Config 应用配置结构
