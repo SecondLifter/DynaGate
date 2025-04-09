@@ -1511,7 +1511,14 @@
                 function validateNginxConfig(config) {
                     const errors = [];
                     
-                    // 检查大括号匹配
+                    // 检查是否包含log_format指令，这种指令通常会跨多行并包含多个分号
+                    const hasLogFormat = config.includes('log_format');
+                    const isMainConfig = config.includes('worker_processes') || 
+                                        config.includes('error_log') || 
+                                        config.includes('pid') ||
+                                        config.includes('events {');
+                    
+                    // 对于所有Nginx配置类型，检查大括号匹配
                     let braceCount = 0;
                     for (let i = 0; i < config.length; i++) {
                         if (config[i] === '{') braceCount++;
@@ -1522,25 +1529,68 @@
                         }
                     }
                     if (braceCount !== 0) {
-                        errors.push("括号不匹配: 缺少 '}'");
+                        errors.push(`括号不匹配: ${braceCount > 0 ? '缺少' : '多余'} ${Math.abs(braceCount)} 个闭括号`);
+                    }
+                    
+                    // 检查是否完全没有大括号
+                    const openBraces = (config.match(/{/g) || []).length;
+                    const closeBraces = (config.match(/}/g) || []).length;
+                    
+                    if (openBraces === 0 && closeBraces === 0) {
+                        if (!config.includes(';')) {
+                            errors.push("无效的Nginx配置: 缺少分号和块结构");
+                        }
+                    }
+                    
+                    // 如果是log_format配置或主配置，简化验证
+                    if (hasLogFormat || isMainConfig) {
+                        // 对于主配置，检查必要的events块
+                        if (isMainConfig && !config.includes('events')) {
+                            errors.push("Nginx主配置缺少必要的events块");
+                        } else {
+                            // 其他验证已经完成，不需要后续的验证
+                            return errors.length > 0 ? `Nginx配置错误:\n${errors.join('\n')}` : null;
+                        }
                     }
                     
                     // 检查分号
                     const lines = config.split('\n');
+                    let inLogFormatBlock = false;
+                    
                     for (let i = 0; i < lines.length; i++) {
                         const line = lines[i].trim();
+                        
                         // 忽略空行、注释和大括号行
                         if (!line || line.startsWith('#') || line === '{' || line === '}') {
                             continue;
                         }
-                        // 检查分号结尾
-                        if (!line.endsWith(';') && !line.endsWith('{')) {
+                        
+                        // 检测log_format块的开始和结束
+                        if (line.startsWith('log_format')) {
+                            inLogFormatBlock = true;
+                        }
+                        
+                        // 如果当前在log_format块内，并且行末有分号，可能是块结束
+                        if (inLogFormatBlock && line.endsWith(';')) {
+                            // 检查是完整的log_format结束还是只是内部的一个分号
+                            const quoteCount = (line.match(/'/g) || []).length + 
+                                              (line.match(/"/g) || []).length;
+                            // 如果引号数量是偶数，可能是log_format块的结束
+                            if (quoteCount % 2 === 0) {
+                                inLogFormatBlock = false;
+                            }
+                        }
+                        
+                        // 只在非log_format块内检查分号
+                        if (!inLogFormatBlock && !line.endsWith(';') && !line.endsWith('{')) {
                             errors.push(`第 ${i+1} 行缺少分号结尾: ${line}`);
                         }
                     }
                     
-                    // 检查server区块
-                    if (config.length > 0 && !config.includes('server') && !config.includes('upstream') && !config.includes('location')) {
+                    // 如果不是主配置和log_format，检查server区块
+                    if (!isMainConfig && !hasLogFormat && 
+                        config.length > 0 && !config.includes('server') && 
+                        !config.includes('upstream') && !config.includes('location')) {
                         errors.push("配置缺少必要的server、upstream或location区块");
                     }
                     

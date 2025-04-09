@@ -28,35 +28,78 @@ func ValidateConfig(configType string, content string) ValidationResult {
 
 // validateNginx performs basic NGINX configuration validation
 func validateNginx(content string) ValidationResult {
-	if !strings.Contains(content, "server {") {
+	// 检查是否包含log_format指令，这种指令通常会跨多行并包含多个分号
+	hasLogFormat := strings.Contains(content, "log_format")
+	isMainConfig := strings.Contains(content, "worker_processes") ||
+		strings.Contains(content, "error_log") ||
+		strings.Contains(content, "pid")
+
+	// 对于所有类型的Nginx配置，检查大括号是否匹配
+	openBraces := strings.Count(content, "{")
+	closeBraces := strings.Count(content, "}")
+
+	if openBraces != closeBraces {
+		return ValidationResult{
+			Valid:   false,
+			Message: fmt.Sprintf("括号不匹配: 发现 %d 个开括号和 %d 个闭括号", openBraces, closeBraces),
+		}
+	}
+
+	// 检查是否缺少必要的块结构
+	if !strings.Contains(content, "{") && !strings.Contains(content, "}") {
+		// 如果完全没有括号，可能是配置错误
+		if !strings.Contains(content, ";") {
+			return ValidationResult{
+				Valid:   false,
+				Message: "无效的Nginx配置: 缺少分号和块结构",
+			}
+		}
+	}
+
+	if !strings.Contains(content, "server {") && !hasLogFormat && !isMainConfig {
 		return ValidationResult{
 			Valid:   false,
 			Message: "Invalid NGINX configuration: missing server block",
 		}
 	}
 
-	// 检查基本语法
-	if !strings.Contains(content, "}") {
+	// 对于log_format，我们不进行严格的指令检查
+	if hasLogFormat {
 		return ValidationResult{
-			Valid:   false,
-			Message: "Invalid NGINX configuration: missing closing brace",
+			Valid:   true,
+			Message: "NGINX log_format configuration appears to be valid",
 		}
 	}
 
-	// 检查常见指令
-	requiredDirectives := []string{"listen", "server_name"}
-	missingDirectives := []string{}
-
-	for _, directive := range requiredDirectives {
-		if !strings.Contains(content, directive) {
-			missingDirectives = append(missingDirectives, directive)
+	// 如果是主配置文件，检查必要的指令
+	if isMainConfig {
+		if !strings.Contains(content, "events") {
+			return ValidationResult{
+				Valid:   false,
+				Message: "Nginx主配置缺少必要的events块",
+			}
 		}
-	}
+	} else {
+		// 对于server配置，检查常见指令
+		requiredDirectives := []string{"listen", "server_name"}
+		missingDirectives := []string{}
 
-	if len(missingDirectives) > 0 {
-		return ValidationResult{
-			Valid:   false,
-			Message: fmt.Sprintf("Missing required directives: %s", strings.Join(missingDirectives, ", ")),
+		for _, directive := range requiredDirectives {
+			if !strings.Contains(content, directive) {
+				missingDirectives = append(missingDirectives, directive)
+			}
+		}
+
+		if len(missingDirectives) > 0 && !strings.Contains(content, "events {") {
+			// 如果是主配置，可能不需要listen和server_name
+			if !strings.Contains(content, "worker_processes") &&
+				!strings.Contains(content, "error_log") &&
+				!strings.Contains(content, "pid") {
+				return ValidationResult{
+					Valid:   false,
+					Message: fmt.Sprintf("Missing required directives: %s", strings.Join(missingDirectives, ", ")),
+				}
+			}
 		}
 	}
 

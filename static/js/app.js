@@ -121,10 +121,47 @@ const app = Vue.createApp({
         },
         validateNginx() {
             try {
-                // 这里可以添加更复杂的NGINX配置验证逻辑
+                // 检查是否包含log_format指令或主配置文件的元素
+                const hasLogFormat = this.currentValue.includes('log_format');
+                const isMainConfig = this.currentValue.includes('worker_processes') || 
+                                    this.currentValue.includes('error_log') || 
+                                    this.currentValue.includes('pid') ||
+                                    this.currentValue.includes('events {');
+                
+                // 检查大括号是否匹配
+                const openBraces = (this.currentValue.match(/{/g) || []).length;
+                const closeBraces = (this.currentValue.match(/}/g) || []).length;
+                
+                if (openBraces !== closeBraces) {
+                    throw new Error(`括号不匹配: 发现 ${openBraces} 个开括号和 ${closeBraces} 个闭括号`);
+                }
+                
+                // 检查是否完全没有括号，这可能是配置错误
+                if (openBraces === 0 && closeBraces === 0) {
+                    if (!this.currentValue.includes(';')) {
+                        throw new Error('无效的Nginx配置: 缺少分号和块结构');
+                    }
+                }
+
+                // 对于log_format或主配置，进行简化的验证
+                if (hasLogFormat || isMainConfig) {
+                    // 对于主配置，检查events块
+                    if (isMainConfig && !this.currentValue.includes('events')) {
+                        throw new Error('Nginx主配置缺少必要的events块');
+                    } else {
+                        this.validationResult = {
+                            valid: true,
+                            message: 'NGINX configuration is valid'
+                        };
+                        return true;
+                    }
+                }
+                
+                // 对于其他配置，检查server块
                 if (!this.currentValue.includes('server {')) {
                     throw new Error('Invalid NGINX configuration: missing server block');
                 }
+                
                 this.validationResult = {
                     valid: true,
                     message: 'NGINX configuration is valid'
