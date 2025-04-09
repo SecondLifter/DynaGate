@@ -230,7 +230,35 @@ func (h *Handler) SetValue(c *gin.Context) {
 		configType = "coredns"
 	}
 
-	if configType != "" {
+	// 检查是否为hosts文件格式
+	if strings.Contains(key, "/hosts/") {
+		// 对于hosts文件，只需要简单验证有没有IP地址格式的行
+		lines := strings.Split(req.Value, "\n")
+		valid := false
+
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			// 跳过空行和注释行
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+
+			// 检查是否至少有两列，并且第一列是IP地址格式
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				// 简单检查IP格式 (需要包含3个点，表示x.x.x.x)
+				if strings.Count(fields[0], ".") == 3 {
+					valid = true
+					break
+				}
+			}
+		}
+
+		if !valid && strings.TrimSpace(req.Value) != "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "无效的hosts文件格式: 缺少IP地址映射"})
+			return
+		}
+	} else if configType != "" {
 		result := validator.ValidateConfig(configType, req.Value)
 		if !result.Valid {
 			c.JSON(http.StatusBadRequest, gin.H{"error": result.Message})

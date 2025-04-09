@@ -140,10 +140,42 @@ const app = Vue.createApp({
         },
         validateCoreDNS() {
             try {
-                // 这里可以添加更复杂的CoreDNS配置验证逻辑
-                if (!this.currentValue.includes('.')) {
-                    throw new Error('Invalid CoreDNS configuration: missing domain');
+                // 检查路径是否包含hosts关键字，表示这是hosts文件
+                if (this.selectedKey.includes('/hosts/')) {
+                    // 对于hosts文件，检查是否包含至少一个有效行（IP + 主机名）
+                    const lines = this.currentValue.split('\n');
+                    for (const line of lines) {
+                        const trimmedLine = line.trim();
+                        // 跳过空行和注释行
+                        if (trimmedLine === '' || trimmedLine.startsWith('#')) {
+                            continue;
+                        }
+                        // 检查是否至少有两个字段，第一个是IP地址格式
+                        const fields = trimmedLine.split(/\s+/);
+                        if (fields.length >= 2) {
+                            const ipParts = fields[0].split('.');
+                            if (ipParts.length === 4) {
+                                // 找到至少一个看起来像 IP 的行，认为格式有效
+                                this.validationResult = {
+                                    valid: true,
+                                    message: 'CoreDNS hosts文件配置有效'
+                                };
+                                return true;
+                            }
+                        }
+                    }
+                    
+                    // 没有找到有效的IP映射行
+                    throw new Error('无效的hosts配置: 缺少IP地址到主机名的映射');
                 }
+                
+                // 原有CoreDNS配置验证逻辑
+                if (!this.currentValue.includes('.') && 
+                    !this.currentValue.includes(':') && 
+                    !this.currentValue.includes('/')) {
+                    throw new Error('Invalid CoreDNS configuration: missing domain, IP, or path format');
+                }
+                
                 this.validationResult = {
                     valid: true,
                     message: 'CoreDNS configuration is valid'
